@@ -1,0 +1,42 @@
+# DigitalOcean App Platform spec. Create with:  doctl apps create --spec .do/app.yaml
+# (or App Platform → Create App → GitHub → this repo; it detects the Dockerfile).
+# Set the SECRET values in the dashboard (Settings → App-Level/Component env vars) — never commit them.
+name: betterhood-api
+region: sgp # Singapore: closest App Platform region to the Supabase project (Tokyo) and to users in India
+services:
+  - name: api
+    github:
+      repo: Vivek9606/capacitor-app-backend
+      branch: main
+      deploy_on_push: true
+    dockerfile_path: Dockerfile
+    http_port: 8080
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    health_check:
+      http_path: /health
+    envs:
+      - { key: NODE_ENV, value: production }
+      - { key: PORT, value: "8080" }
+      - { key: DATABASE_URL, type: SECRET, scope: RUN_AND_BUILD_TIME }
+      - { key: JWT_SECRET, type: SECRET }
+      - { key: CORS_ORIGINS, value: "https://betterhood.in,https://www.betterhood.in" }
+      - { key: PUBLIC_WEB_URL, value: "https://betterhood.in" }
+      - { key: WHATSAPP_PROVIDER, value: log }
+      - { key: WHATSAPP_TOKEN, type: SECRET }
+      - { key: WHATSAPP_PHONE_NUMBER_ID, type: SECRET }
+      - { key: WHATSAPP_APP_SECRET, type: SECRET }
+      - { key: WHATSAPP_VERIFY_TOKEN, type: SECRET }
+jobs:
+  # Runs before every deploy; applies new migrations/*.sql once each.
+  - name: migrate
+    kind: PRE_DEPLOY
+    github:
+      repo: Vivek9606/capacitor-app-backend
+      branch: main
+    dockerfile_path: Dockerfile
+    run_command: node dist/migrate.js
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    envs:
+      - { key: NODE_ENV, value: production }
+      - { key: DATABASE_URL, type: SECRET }
