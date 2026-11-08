@@ -16,4 +16,5 @@ COPY package.json ./
 COPY migrations ./migrations
 USER node
 EXPOSE 8080
-CMD ["node", "dist/server.js"]
+# Applies new DB migrations and refreshes the exercise library (both idempotent), then starts the API.
+CMD ["sh", "-c", "node dist/migrate.js && node dist/seed/exercises.js && node dist/server.js"]

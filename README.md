@@ -57,7 +57,7 @@ Tables live in their own `app` schema with row-level security on and no policies
    | `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` | for the webhook |
 
    **Do not set `OTP_DEV_CODE` in production.** With it set, anyone can log in as any number.
-3. **Migrations.** The `migrate` pre-deploy job in `.do/app.yaml` applies new `migrations/*.sql` before each release. Without the spec, add a pre-deploy job with run command `node dist/migrate.js`. Seed the exercise library once from the app's console with `npm run seed:exercises:prod`.
+3. **Migrations and exercises** run automatically every time the container starts (both are safe to repeat). No extra jobs needed.
 4. **Point the web app at the API.** Use the app URL (or a custom domain such as `api.betterhood.in`) as `VITE_API_URL` when building the web app.
 
 You can also deploy to a Droplet with Docker: `docker build -t betterhood-api . && docker run -p 8080:8080 --env-file .env betterhood-api`.
