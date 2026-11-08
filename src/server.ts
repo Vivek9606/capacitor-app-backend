@@ -45,6 +45,8 @@ app.setErrorHandler((err: Error & { statusCode?: number }, req, reply) => {
   return reply.code(500).send({ error: 'server_error', message: 'Something went wrong. Please try again.' })
 })
 
+app.get('/', async () => ({ name: 'Betterhood API', status: 'running', health: '/health' }))
+
 app.get('/health', async () => {
   await pool.query('select 1')
   return { ok: true }
