@@ -4,13 +4,13 @@ import { requireRole } from '../auth.js'
 import { one, q, tx } from '../db.js'
 import * as M from '../mappers.js'
 import { sendBookingMessage, webUrl } from '../notify.js'
-import { bookingStatus, hhmm, id, isoDate, planItem, rx, visitType } from '../schemas.js'
+import { availability, billing, bookingStatus, hhmm, id, isoDate, planItem, practice, rx, visitType } from '../schemas.js'
 import { badRequest, firstName, linkToken, newId, normalizePhone, notFound, todayIST } from '../util.js'
 import { sendLater } from '../whatsapp.js'
 
 const MAX_PHOTO = 400_000 // data URL chars (~300 KB image). Move to object storage later.
 
-async function ownPatient(physioId: string, patientId: string) {
+export async function ownPatient(physioId: string, patientId: string) {
   const p = await one('select * from patients where id = $1 and physio_id = $2', [patientId, physioId])
   if (!p) throw notFound('Patient not found')
   return p
@@ -33,10 +33,14 @@ export async function physioRoutes(app: FastifyInstance) {
         clinic: z.object({ name: z.string().max(120), address: z.string().max(300), area: z.string().max(80) }).nullable(),
         consult: z.object({
           inClinic: z.object({ enabled: z.boolean(), fee: z.number().int().min(0).max(100000), minutes: z.number().int().min(10).max(240) }),
-          homeVisit: z.object({ enabled: z.boolean(), fee: z.number().int().min(0).max(100000), radiusKm: z.number().int().min(0).max(100) }),
+          homeVisit: z.object({ enabled: z.boolean(), fee: z.number().int().min(0).max(100000), radiusKm: z.number().int().min(0).max(100), minutes: z.number().int().min(10).max(240).optional() }),
         }),
         workingDays: z.array(z.enum(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'])),
         hours: z.object({ start: hhmm, end: hhmm }).nullable(),
+        practice: practice.nullable(),
+        availability: availability.nullable(),
+        billing: billing.nullable(),
+        courseProgress: z.array(z.string().regex(/^l\d{1,3}$/)).max(100),
         partnerOptIns: z.array(z.string().max(30)).max(10),
         communityWaitlist: z.boolean(),
         communityTopics: z.array(z.string().max(60)).max(20),
@@ -58,6 +62,10 @@ export async function physioRoutes(app: FastifyInstance) {
       consult: b.consult && JSON.stringify(b.consult),
       working_days: b.workingDays,
       hours: b.hours === undefined ? undefined : b.hours && JSON.stringify(b.hours),
+      practice: b.practice === undefined ? undefined : b.practice && JSON.stringify(b.practice),
+      availability: b.availability === undefined ? undefined : b.availability && JSON.stringify(b.availability),
+      billing: b.billing === undefined ? undefined : b.billing && JSON.stringify(b.billing),
+      course_progress: b.courseProgress,
       partner_opt_ins: b.partnerOptIns,
       community_waitlist: b.communityWaitlist,
       community_topics: b.communityTopics,
@@ -189,22 +197,27 @@ export async function physioRoutes(app: FastifyInstance) {
         date: isoDate,
         time: hhmm,
         visitType,
+        minutes: z.number().int().min(5).max(480).optional(),
         reason: z.string().max(200).optional(),
+        address: z.string().trim().max(300).optional(),
         isNewPatient: z.boolean().default(false),
-        status: z.enum(['awaiting', 'confirmed']),
+        status: z.enum(['awaiting', 'confirmed', 'checked_in']),
         sendConfirmation: z.boolean().default(true),
         reminder: z.boolean().default(true),
+        source: z.enum(['physio', 'walk_in']).default('physio'),
       })
       .parse(req.body)
     const phone = normalizePhone(b.patientPhone)
     if (!phone) throw badRequest('Invalid mobile number')
     if (b.patientId) await ownPatient(me, b.patientId)
+    // A walk-in is someone at the clinic right now: no confirmation or reminder to send.
+    const walkIn = b.source === 'walk_in' || b.status === 'checked_in'
     const row = await one(
-      `insert into bookings (id, physio_id, patient_id, patient_name, patient_phone, date, time, visit_type, reason, is_new_patient, status, send_confirmation, reminder, source)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'physio') returning *`,
-      [b.id ?? newId('bk'), me, b.patientId ?? null, b.patientName, phone, b.date, b.time, b.visitType, b.reason ?? null, b.isNewPatient, b.status, b.sendConfirmation, b.reminder],
+      `insert into bookings (id, physio_id, patient_id, patient_name, patient_phone, date, time, visit_type, minutes, reason, address, is_new_patient, status, send_confirmation, reminder, source, checked_in_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) returning *`,
+      [b.id ?? newId('bk'), me, b.patientId ?? null, b.patientName, phone, b.date, b.time, b.visitType, b.minutes ?? null, b.reason ?? null, b.address ?? null, b.isNewPatient, b.status, walkIn ? false : b.sendConfirmation, walkIn ? false : b.reminder, b.source, b.status === 'checked_in' ? new Date() : null],
     )
-    if (b.sendConfirmation) await sendBookingMessage(row!.id, 'booking_confirmation')
+    if (row!.send_confirmation) await sendBookingMessage(row!.id, 'booking_confirmation')
     return M.booking(row!)
   })
 
@@ -212,7 +225,7 @@ export async function physioRoutes(app: FastifyInstance) {
     const me = requireRole(req, 'physio')
     const { id: bid } = z.object({ id }).parse(req.params)
     const b = z
-      .object({ status: bookingStatus, date: isoDate, time: hhmm, visitType, sendConfirmation: z.boolean(), reminder: z.boolean(), patientId: id })
+      .object({ status: bookingStatus, date: isoDate, time: hhmm, visitType, minutes: z.number().int().min(5).max(480), address: z.string().trim().max(300).nullable(), sendConfirmation: z.boolean(), reminder: z.boolean(), patientId: id })
       .partial()
       .parse(req.body)
     const cur = await one('select * from bookings where id = $1 and physio_id = $2', [bid, me])
@@ -225,9 +238,11 @@ export async function physioRoutes(app: FastifyInstance) {
         `update bookings set status = coalesce($2, status), date = coalesce($3, date), time = coalesce($4, time),
                 visit_type = coalesce($5, visit_type), send_confirmation = coalesce($6, send_confirmation),
                 reminder = coalesce($7, reminder), patient_id = coalesce($8, patient_id),
-                reminder_sent_at = case when $9::boolean then null else reminder_sent_at end
+                reminder_sent_at = case when $9::boolean then null else reminder_sent_at end,
+                minutes = coalesce($10, minutes), address = case when $11::boolean then $12 else address end,
+                checked_in_at = case when $2 = 'checked_in' then coalesce(checked_in_at, now()) else checked_in_at end
           where id = $1 returning *`,
-        [bid, b.status ?? null, b.date ?? null, b.time ?? null, b.visitType ?? null, b.sendConfirmation ?? null, b.reminder ?? null, b.patientId ?? null, !!moved],
+        [bid, b.status ?? null, b.date ?? null, b.time ?? null, b.visitType ?? null, b.sendConfirmation ?? null, b.reminder ?? null, b.patientId ?? null, !!moved, b.minutes ?? null, b.address !== undefined, b.address ?? null],
       )
       if (b.status === 'done' && cur.status !== 'done' && cur.patient_id) await c.query('update patients set visits = visits + 1 where id = $1', [cur.patient_id])
       return r.rows[0]

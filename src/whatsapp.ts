@@ -12,6 +12,8 @@ export type Template =
   | { name: 'booking_confirmation'; to: string; patientName: string; physioName: string; when: string; where: string; bookingId: string }
   | { name: 'booking_reminder'; to: string; patientName: string; physioName: string; when: string; where: string; bookingId: string }
   | { name: 'physio_reply'; to: string; patientName: string; physioName: string; text: string; url: string }
+  | { name: 'consent_request'; to: string; patientName: string; physioName: string; formTitle: string; url: string }
+  | { name: 'invoice_shared'; to: string; patientName: string; physioName: string; number: string; amount: string; url: string }
 
 function bodyParams(t: Template): string[] {
   switch (t.name) {
@@ -26,6 +28,10 @@ function bodyParams(t: Template): string[] {
       return [t.patientName, t.physioName, t.when, t.where]
     case 'physio_reply':
       return [t.patientName, t.physioName, t.text, t.url]
+    case 'consent_request':
+      return [t.patientName, t.physioName, t.formTitle, t.url]
+    case 'invoice_shared':
+      return [t.patientName, t.physioName, t.number, t.amount, t.url]
   }
 }
 

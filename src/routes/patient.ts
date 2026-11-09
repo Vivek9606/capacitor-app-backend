@@ -1,10 +1,12 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { requireRole } from '../auth.js'
-import { one, q } from '../db.js'
+import { assertSlotFree } from '../calendar.js'
+import { one, q, tx } from '../db.js'
 import * as M from '../mappers.js'
-import { hhmm, id, isoDate, visitType } from '../schemas.js'
+import { hhmm, id, isoDate, signature, visitType } from '../schemas.js'
 import { addDays, badRequest, HttpError, newId, notFound, todayIST } from '../util.js'
+import { joinGroup } from './practice.js'
 
 async function me(patientId: string) {
   const p = await one('select * from patients where id = $1', [patientId])
@@ -55,16 +57,17 @@ export async function patientRoutes(app: FastifyInstance) {
   app.post('/patient/bookings', async (req) => {
     const pid = requireRole(req, 'patient')
     const p = await me(pid)
-    const b = z.object({ id: id.optional(), date: isoDate, time: hhmm, visitType, reason: z.string().max(200).optional() }).parse(req.body)
+    const b = z.object({ id: id.optional(), date: isoDate, time: hhmm, visitType, reason: z.string().max(200).optional(), address: z.string().trim().max(300).optional() }).parse(req.body)
     if (b.date < todayIST()) throw badRequest('Pick a future date')
+    if (b.visitType === 'home_visit' && !b.address) throw badRequest('Add the address for the home visit')
     const open = await one("select count(*)::int as n from bookings where patient_id = $1 and status = 'requested' and date >= $2", [pid, todayIST()])
     if ((open?.n ?? 0) >= 3) throw new HttpError(429, 'You already have requests waiting for your physio', 'too_many_requests')
-    const clash = await one("select 1 from bookings where physio_id = $1 and date = $2 and time = $3 and status <> 'cancelled'", [p.physio_id, b.date, b.time])
-    if (clash) throw new HttpError(409, 'That slot was just taken. Pick another time.', 'slot_taken')
+    const physio = await one('select * from physios where id = $1', [p.physio_id])
+    await assertSlotFree(physio!, b.date, b.time, b.visitType, { forPatient: true })
     const row = await one(
-      `insert into bookings (id, physio_id, patient_id, patient_name, patient_phone, date, time, visit_type, reason, is_new_patient, status, send_confirmation, reminder, source)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,false,'requested',true,true,'physio') returning *`,
-      [b.id ?? newId('bk'), p.physio_id, pid, p.name, p.phone, b.date, b.time, b.visitType, b.reason ?? null],
+      `insert into bookings (id, physio_id, patient_id, patient_name, patient_phone, date, time, visit_type, reason, address, is_new_patient, status, send_confirmation, reminder, source)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,false,'requested',true,true,'physio') returning *`,
+      [b.id ?? newId('bk'), p.physio_id, pid, p.name, p.phone, b.date, b.time, b.visitType, b.reason ?? null, b.visitType === 'home_visit' ? b.address ?? null : null],
     )
     return M.booking(row!)
   })
@@ -96,5 +99,40 @@ export async function patientRoutes(app: FastifyInstance) {
     const pid = requireRole(req, 'patient')
     await q("update messages set read = true where patient_id = $1 and sender = 'physio' and not read", [pid])
     return { ok: true }
+  })
+
+  // ---------- treatment consent forms ----------
+  app.post('/patient/consents/:id/sign', async (req) => {
+    const pid = requireRole(req, 'patient')
+    const { id: cid } = z.object({ id }).parse(req.params)
+    const s = signature.parse(req.body)
+    const row = await one(
+      `update consents set status = 'signed', signed_name = $3, signature = $4, guardian = $5, signed_at = now()
+        where id = $1 and patient_id = $2 and status = 'pending' returning *`,
+      [cid, pid, s.signedName, s.signature ?? null, s.guardian || null],
+    )
+    if (!row) throw notFound('No pending consent to sign')
+    return M.consent(row)
+  })
+
+  // Decline a pending request, or withdraw a signed consent.
+  app.patch('/patient/consents/:id', async (req) => {
+    const pid = requireRole(req, 'patient')
+    const { id: cid } = z.object({ id }).parse(req.params)
+    const { status } = z.object({ status: z.enum(['declined', 'revoked']) }).parse(req.body)
+    const from = status === 'declined' ? 'pending' : 'signed'
+    const row = await one('update consents set status = $3 where id = $1 and patient_id = $2 and status = $4 returning *', [cid, pid, status, from])
+    if (!row) throw notFound('Consent not found')
+    return M.consent(row)
+  })
+
+  // ---------- group classes ----------
+  app.post('/patient/groups/:id/join', async (req) => {
+    const pid = requireRole(req, 'patient')
+    const p = await me(pid)
+    const { id: gid } = z.object({ id }).parse(req.params)
+    const b = z.object({ id: id.optional() }).parse(req.body ?? {})
+    const row = await tx((c) => joinGroup(c, gid, p.physio_id, { id: b.id, patientId: pid, name: p.name, phone: p.phone }, { publicOnly: true }))
+    return M.groupForPatient(row, pid, p.phone)
   })
 }

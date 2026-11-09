@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { signSession, signSignup, verifySignup } from '../auth.js'
 import { one, q, tx } from '../db.js'
 import { env } from '../env.js'
+import { practice } from '../schemas.js'
 import { sendWhatsApp } from '../whatsapp.js'
 import { badRequest, HttpError, newId, normalizePhone, otpCode, safeEqual, sha256, slugify } from '../util.js'
 
@@ -74,6 +75,7 @@ export async function authRoutes(app: FastifyInstance) {
         email: z.string().trim().email().max(120).optional().or(z.literal('')),
         focusAreas: z.array(z.string().max(40)).max(12),
         practiceSettings: z.array(z.string().max(40)).max(8),
+        practice: practice.optional(),
         referredBy: z.string().max(20).optional(),
       })
       .parse(req.body)
@@ -91,8 +93,8 @@ export async function authRoutes(app: FastifyInstance) {
     const physio = await tx(async (c) => {
       const referrer = body.referredBy ? (await c.query('select id from physios where invite_code = $1', [body.referredBy.toUpperCase()])).rows[0] : undefined
       const r = await c.query(
-        `insert into physios (id, phone, name, email, focus_areas, practice_settings, slug, consult, invite_code, referred_by)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning *`,
+        `insert into physios (id, phone, name, email, focus_areas, practice_settings, slug, consult, invite_code, referred_by, practice)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning *`,
         [
           id,
           phone,
@@ -101,9 +103,13 @@ export async function authRoutes(app: FastifyInstance) {
           body.focusAreas,
           body.practiceSettings,
           slug,
-          { inClinic: { enabled: true, fee: 600, minutes: 45 }, homeVisit: { enabled: false, fee: 1000, radiusKm: 5 } },
+          {
+            inClinic: { enabled: !body.practice || body.practice.modes.some((m) => m !== 'home'), fee: 600, minutes: 45 },
+            homeVisit: { enabled: !!body.practice?.modes.includes('home'), fee: 1000, radiusKm: 5, minutes: 60 },
+          },
           inviteCode,
           referrer?.id ?? null,
+          body.practice ? JSON.stringify(body.practice) : null,
         ],
       )
       if (referrer) {

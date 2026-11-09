@@ -21,6 +21,10 @@ export const physio = (r: Row) => ({
   consult: r.consult,
   workingDays: r.working_days,
   hours: opt(r.hours),
+  practice: opt(r.practice),
+  availability: opt(r.availability),
+  billing: opt(r.billing),
+  courseProgress: r.course_progress ?? [],
   inviteCode: r.invite_code,
   partnerOptIns: r.partner_opt_ins,
   communityWaitlist: r.community_waitlist,
@@ -39,6 +43,7 @@ export const physioPublic = (r: Row) => {
     communityWaitlist: false,
     communityTopics: [],
     inviteCode: '',
+    courseProgress: [],
   }
 }
 
@@ -107,6 +112,9 @@ export const booking = (r: Row) => ({
   sendConfirmation: r.send_confirmation,
   reminder: r.reminder,
   source: r.source,
+  minutes: opt(r.minutes),
+  address: opt(r.address),
+  checkedInAt: iso(r.checked_in_at),
   createdAt: iso(r.created_at),
 })
 
@@ -135,4 +143,86 @@ export const template = (r: Row) => ({
   items: r.items,
   daysPerWeek: r.days_per_week,
   weeks: r.weeks,
+})
+
+export const block = (r: Row) => ({
+  id: r.id,
+  physioId: r.physio_id,
+  date: r.date,
+  start: opt(r.start_time),
+  end: opt(r.end_time),
+  reason: opt(r.reason),
+})
+
+export const group = (r: Row) => ({
+  id: r.id,
+  physioId: r.physio_id,
+  seriesId: opt(r.series_id),
+  title: r.title,
+  description: opt(r.description),
+  date: r.date,
+  time: r.time,
+  minutes: r.minutes,
+  capacity: r.capacity,
+  fee: r.fee,
+  location: r.location,
+  publicBooking: r.public_booking,
+  status: r.status,
+  participants: r.participants ?? [],
+  createdAt: iso(r.created_at),
+})
+
+const seatsTaken = (r: Row) => ((r.participants ?? []) as { status: string }[]).filter((p) => p.status !== 'cancelled').length
+
+/** A group session as a patient sees it: only their own seat, other seats as anonymous placeholders. */
+export const groupForPatient = (r: Row, patientId: string, phone: string) => {
+  const g = group(r)
+  const mine = (g.participants as { patientId?: string; phone: string; status: string }[]).filter((p) => p.patientId === patientId || p.phone === phone)
+  const others = Math.max(0, seatsTaken(r) - mine.filter((p) => p.status !== 'cancelled').length)
+  const anon = Array.from({ length: others }, (_, i) => ({ id: `seat_${i}`, name: '', phone: '', status: 'booked', joinedAt: '' }))
+  return { ...g, participants: [...mine, ...anon] }
+}
+
+/** Public booking page: no participant details at all. */
+export const groupPublic = (r: Row) => {
+  const { participants: _p, ...g } = group(r)
+  return { ...g, seatsTaken: seatsTaken(r) }
+}
+
+export const invoice = (r: Row) => ({
+  id: r.id,
+  physioId: r.physio_id,
+  patientId: opt(r.patient_id),
+  patientName: r.patient_name,
+  patientPhone: r.patient_phone,
+  number: r.number,
+  date: r.date,
+  items: r.items,
+  discount: r.discount,
+  taxPct: Number(r.tax_pct),
+  total: r.total,
+  status: r.status,
+  method: opt(r.method),
+  paidAt: iso(r.paid_at),
+  notes: opt(r.notes),
+  bookingId: opt(r.booking_id),
+  groupSessionId: opt(r.group_session_id),
+  sentAt: iso(r.sent_at),
+  createdAt: iso(r.created_at),
+})
+
+export const consent = (r: Row) => ({
+  id: r.id,
+  physioId: r.physio_id,
+  patientId: r.patient_id,
+  formId: r.form_id,
+  title: r.title,
+  body: r.body,
+  status: r.status,
+  method: r.method,
+  signedName: opt(r.signed_name),
+  signature: opt(r.signature),
+  guardian: opt(r.guardian),
+  requestedAt: iso(r.requested_at),
+  signedAt: iso(r.signed_at),
 })

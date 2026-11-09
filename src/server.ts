@@ -9,6 +9,7 @@ import { authRoutes } from './routes/auth.js'
 import { meRoutes } from './routes/me.js'
 import { patientRoutes } from './routes/patient.js'
 import { physioRoutes } from './routes/physio.js'
+import { practiceRoutes } from './routes/practice.js'
 import { publicRoutes } from './routes/public.js'
 import { webhookRoutes } from './routes/webhook.js'
 import { HttpError } from './util.js'
@@ -55,6 +56,7 @@ app.get('/health', async () => {
 await app.register(authRoutes)
 await app.register(meRoutes)
 await app.register(physioRoutes)
+await app.register(practiceRoutes)
 await app.register(patientRoutes)
 await app.register(publicRoutes)
 await app.register(webhookRoutes)

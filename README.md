@@ -74,6 +74,8 @@ Create these templates in Meta Business Manager, language `en`. The body variabl
 | `booking_confirmation` | patient name, physio name, date/time, place | quick replies: Confirm, Reschedule |
 | `booking_reminder` | patient name, physio name, date/time, place | quick replies: Confirm, Reschedule |
 | `physio_reply` | patient name, physio name, message, link | — |
+| `consent_request` | patient name, physio name, form title, link | — |
+| `invoice_shared` | patient name, physio name, invoice number, amount, link | — |
 
 Set the webhook URL to `https://<api>/webhooks/whatsapp` with your `WHATSAPP_VERIFY_TOKEN`, and subscribe to `messages`. Taps on Confirm and Reschedule update the booking. Signatures are checked with `WHATSAPP_APP_SECRET`.
 
@@ -87,7 +89,11 @@ Reminders are sent automatically about 2 hours before each booking (the job runs
 | `GET /public/plan-link/:token`, `POST /auth/plan-link/verify` | patient entry from WhatsApp |
 | `GET /me/bootstrap` | everything the signed-in user can see |
 | `PATCH /physio/me` · `POST/PATCH /physio/patients` · `POST /physio/plans` · `POST /physio/templates` · `POST/PATCH /physio/bookings` · `POST /physio/messages` · `POST /physio/referrals` | physio actions |
-| `POST /patient/consent` · `PUT /patient/sessions` · `POST/PATCH /patient/bookings` · `POST /patient/messages` | patient actions |
-| `GET /public/physios/:slug` · `POST /public/physios/:slug/booking-requests` | public profile and booking |
+| `POST /physio/blocks` · `DELETE /physio/blocks/:id` | blocked time (leave, rounds, lunch) |
+| `POST/PATCH /physio/groups` · `POST /physio/groups/:id/participants` · `PATCH /physio/groups/:gid/participants/:pid` | group therapy sessions, seats and attendance |
+| `POST/PATCH /physio/invoices` | invoices (server assigns `PREFIX-YYYY-0001` numbers and recomputes totals) |
+| `POST /physio/consents` · `POST /physio/consents/:id/sign` · `PATCH /physio/consents/:id` | treatment consent forms (sign in clinic or send to the patient) |
+| `POST /patient/consent` · `PUT /patient/sessions` · `POST/PATCH /patient/bookings` · `POST /patient/messages` · `POST /patient/consents/:id/sign` · `PATCH /patient/consents/:id` · `POST /patient/groups/:id/join` | patient actions |
+| `GET /public/physios/:slug` · `POST /public/physios/:slug/booking-requests` · `POST /public/physios/:slug/groups/:id/join` | public profile, Calendly-style booking page (`/dr/:slug/book`) and group classes |
 | `GET/POST /webhooks/whatsapp` | Meta webhook |
 | `GET /health` | health check (also pings the DB) |
