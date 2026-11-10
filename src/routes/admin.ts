@@ -21,10 +21,21 @@ export async function adminRoutes(app: FastifyInstance) {
     ])
     return {
       counts,
-      physios: physios.map((r) => ({ ...M.physioPublic(r), id: r.id, phone: r.phone, focusAreas: r.focus_areas, patients: r.n_patients, createdAt: r.created_at })),
+      // Full profile (incl. council registration) so admins can check verification requests.
+      physios: physios.map((r) => ({ ...M.physio(r), patients: r.n_patients })),
       patients: patients.map(M.patient),
       assessments: assessments.map(M.assessment),
     }
+  })
+
+  // Approve or reject a physio's verification request (the "Verified" badge on their profile and booking page).
+  app.post('/admin/physios/:id/verification', async (req) => {
+    requireRole(req, 'admin')
+    const { id } = z.object({ id: z.string().max(40) }).parse(req.params)
+    const { status } = z.object({ status: z.enum(['verified', 'none']) }).parse(req.body)
+    const row = await one('update physios set verification = $2 where id = $1 returning *', [id, status])
+    if (!row) throw notFound('Physio not found')
+    return M.physio(row)
   })
 
   // Confirm (or change) the physio for a self-signed-up patient.
