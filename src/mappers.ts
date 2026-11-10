@@ -104,6 +104,8 @@ export const plan = (r: Row) => ({
   sentAt: iso(r.sent_at),
   openedAt: iso(r.opened_at),
   rx: opt(r.rx),
+  changes: r.changes?.length ? r.changes : undefined,
+  updatedAt: iso(r.updated_at),
 })
 
 export const session = (r: Row) => ({

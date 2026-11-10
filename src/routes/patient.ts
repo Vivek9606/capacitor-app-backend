@@ -88,6 +88,7 @@ export async function patientRoutes(app: FastifyInstance) {
     if (!plan) throw notFound('Plan not found')
     const today = todayIST()
     if (b.date > today || b.date < addDays(today, -7) || b.date < plan.start_date) throw badRequest('You can log today or the last 7 days')
+    await q('update plans set opened_at = now() where id = $1 and opened_at is null', [b.planId])
     const row = await one(
       `insert into session_logs (id, plan_id, date, status, pain, note) values ($1,$2,$3,$4,$5,$6)
        on conflict (plan_id, date) do update set status = excluded.status, pain = excluded.pain, note = excluded.note

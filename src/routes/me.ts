@@ -58,6 +58,8 @@ export async function meRoutes(app: FastifyInstance) {
     if (!me) throw new HttpError(401, 'Account not found', 'unauthenticated')
     const physio = me.physio_id ? await one('select * from physios where id = $1', [me.physio_id]) : undefined
     const assessments = await q('select * from assessments where patient_id = $1 order by created_at', [s.sub])
+    // Opening the app counts as opening the plan (plans sent after they first consented included).
+    if (me.consent_at) await q("update plans set opened_at = now() where patient_id = $1 and status = 'active' and opened_at is null", [s.sub])
     const [plans, sessions, bookings, messages, invoices, consents, groups, blocks] = await Promise.all([
       q('select * from plans where patient_id = $1 order by sent_at', [s.sub]),
       q('select sl.* from session_logs sl join plans p on p.id = sl.plan_id where p.patient_id = $1 order by sl.date', [s.sub]),

@@ -128,6 +128,37 @@ export async function physioRoutes(app: FastifyInstance) {
   })
 
   // ---------- care plans (R4 send) ----------
+  // Edit the active plan in place (same plan, same start date and logged sessions). The reason is logged.
+  app.patch('/physio/plans/:id', async (req) => {
+    const me = requireRole(req, 'physio')
+    const { id: planId } = z.object({ id }).parse(req.params)
+    const b = z
+      .object({
+        title: z.string().trim().max(80),
+        items: z.array(planItem).min(1).max(30),
+        daysPerWeek: z.number().int().min(1).max(7),
+        weeks: z.number().int().min(1).max(52),
+        rx: rx.optional(),
+        reason: z.string().trim().min(3, 'Add a reason for the change').max(500),
+        summary: z.array(z.string().max(200)).max(40).default([]),
+      })
+      .parse(req.body)
+    const cur = await one('select * from plans where id = $1 and physio_id = $2', [planId, me])
+    if (!cur) throw notFound('Plan not found')
+    if (cur.status !== 'active') throw badRequest('Only the active plan can be edited')
+    const known = new Set((await q('select id from exercises where id = any($1)', [b.items.map((i) => i.exerciseId)])).map((r) => r.id))
+    const bad = b.items.find((i) => !known.has(i.exerciseId))
+    if (bad) throw badRequest(`Unknown exercise: ${bad.exerciseId}`)
+    const change = { at: new Date().toISOString(), reason: b.reason, summary: b.summary }
+    const row = await one(
+      `update plans set title = $2, items = $3, days_per_week = $4, weeks = $5, rx = coalesce($6, rx),
+              changes = changes || $7::jsonb, updated_at = now()
+        where id = $1 returning *`,
+      [planId, b.title || cur.title, JSON.stringify(b.items), b.daysPerWeek, b.weeks, b.rx ? JSON.stringify(b.rx) : null, JSON.stringify([change])],
+    )
+    return M.plan(row!)
+  })
+
   app.post('/physio/plans', async (req) => {
     const me = requireRole(req, 'physio')
     const b = z
