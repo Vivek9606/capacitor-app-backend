@@ -10,7 +10,8 @@ import { badRequest, HttpError, linkToken, newId, normalizePhone, otpCode, safeE
 
 const OTP_TTL_MIN = 10
 const OTP_MAX_ATTEMPTS = 5
-const OTP_MAX_PER_HOUR = 5
+// Codes requested but never entered, per number per hour. Successful logins don't count.
+const OTP_MAX_PER_HOUR = 10
 const LINK_MAX_ATTEMPTS = 5
 const LINK_LOCK_MIN = 30
 
@@ -31,12 +32,12 @@ async function accountFor(phone: string) {
 }
 
 export async function authRoutes(app: FastifyInstance) {
-  const strict = { config: { rateLimit: { max: 10, timeWindow: '10 minutes' } } }
+  const strict = { config: { rateLimit: { max: 30, timeWindow: '10 minutes' } } }
 
   // O2 · send a one-time code on WhatsApp
   app.post('/auth/otp/request', strict, async (req) => {
     const phone = phoneOrThrow(phoneBody.parse(req.body).phone)
-    const recent = await one<{ n: number }>("select count(*)::int as n from otp_codes where phone = $1 and created_at > now() - interval '1 hour'", [phone])
+    const recent = await one<{ n: number }>("select count(*)::int as n from otp_codes where phone = $1 and not used and created_at > now() - interval '1 hour'", [phone])
     if ((recent?.n ?? 0) >= OTP_MAX_PER_HOUR) throw new HttpError(429, 'Too many codes requested. Try again in an hour.', 'otp_rate_limited')
 
     const code = env.OTP_DEV_CODE ?? otpCode()
