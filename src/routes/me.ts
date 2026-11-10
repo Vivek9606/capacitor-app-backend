@@ -17,7 +17,7 @@ export async function meRoutes(app: FastifyInstance) {
     if (s.role === 'physio') {
       const me = await one('select * from physios where id = $1', [s.sub])
       if (!me) throw new HttpError(401, 'Account not found', 'unauthenticated')
-      const [patients, plans, sessions, bookings, messages, referrals, templates, blocks, groups, invoices, consents] = await Promise.all([
+      const [patients, plans, sessions, bookings, messages, referrals, templates, blocks, groups, invoices, consents, assessments] = await Promise.all([
         q('select * from patients where physio_id = $1 order by name', [s.sub]),
         q('select * from plans where physio_id = $1 order by sent_at', [s.sub]),
         q('select sl.* from session_logs sl join plans p on p.id = sl.plan_id where p.physio_id = $1 order by sl.date', [s.sub]),
@@ -29,6 +29,7 @@ export async function meRoutes(app: FastifyInstance) {
         q("select * from group_sessions where physio_id = $1 and date > (now() - interval '120 days')::date order by date, time", [s.sub]),
         q('select * from invoices where physio_id = $1 order by date, created_at', [s.sub]),
         q('select * from consents where physio_id = $1 order by requested_at', [s.sub]),
+        q('select a.* from assessments a join patients p on p.id = a.patient_id where p.physio_id = $1 order by a.created_at', [s.sub]),
       ])
       return {
         session: { role: 'physio', userId: s.sub },
@@ -46,13 +47,17 @@ export async function meRoutes(app: FastifyInstance) {
           groups: groups.map(M.group),
           invoices: invoices.map(M.invoice),
           consents: consents.map(M.consent),
+          assessments: assessments.map(M.assessment),
         },
       }
     }
 
+    if (s.role === 'admin') throw new HttpError(400, 'Admins use /admin/overview', 'forbidden')
+
     const me = await one('select * from patients where id = $1', [s.sub])
     if (!me) throw new HttpError(401, 'Account not found', 'unauthenticated')
-    const physio = await one('select * from physios where id = $1', [me.physio_id])
+    const physio = me.physio_id ? await one('select * from physios where id = $1', [me.physio_id]) : undefined
+    const assessments = await q('select * from assessments where patient_id = $1 order by created_at', [s.sub])
     const [plans, sessions, bookings, messages, invoices, consents, groups, blocks] = await Promise.all([
       q('select * from plans where patient_id = $1 order by sent_at', [s.sub]),
       q('select sl.* from session_logs sl join plans p on p.id = sl.plan_id where p.patient_id = $1 order by sl.date', [s.sub]),
@@ -93,6 +98,7 @@ export async function meRoutes(app: FastifyInstance) {
         groups: groups.map((g) => M.groupForPatient(g, s.sub, me.phone)),
         invoices: invoices.map(M.invoice),
         consents: consents.map(M.consent),
+        assessments: assessments.map(M.assessment),
       },
     }
   })

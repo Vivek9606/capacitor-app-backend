@@ -98,6 +98,9 @@ export async function physioRoutes(app: FastifyInstance) {
     if (!phone) throw badRequest('Enter a valid 10-digit mobile number')
     const existing = await one('select * from patients where physio_id = $1 and phone = $2', [me, phone])
     if (existing) return M.patient(existing)
+    // Someone who signed up on their own: this physio takes them on (keeps their assessments).
+    const solo = await one("update patients set physio_id = $1, match_status = 'confirmed', suggested_physio_id = null where phone = $2 and physio_id is null returning *", [me, phone])
+    if (solo) return M.patient(solo)
     const row = await one(
       `insert into patients (id, physio_id, phone, name, age, sex, condition, since, link_token)
        values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *`,

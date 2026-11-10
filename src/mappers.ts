@@ -49,7 +49,7 @@ export const physioPublic = (r: Row) => {
 
 export const patient = (r: Row) => ({
   id: r.id,
-  physioId: r.physio_id,
+  physioId: opt(r.physio_id),
   phone: r.phone,
   name: r.name,
   age: opt(r.age),
@@ -60,6 +60,24 @@ export const patient = (r: Row) => ({
   visits: r.visits,
   linkToken: r.link_token,
   consentAt: iso(r.consent_at),
+  createdAt: iso(r.created_at),
+  city: opt(r.city),
+  email: opt(r.email),
+  selfSignup: r.self_signup || undefined,
+  match: r.match_status ? { status: r.match_status, suggestedPhysioId: opt(r.suggested_physio_id) } : undefined,
+})
+
+export const assessment = (r: Row) => ({
+  id: r.id,
+  patientId: r.patient_id,
+  slug: r.slug,
+  area: r.area,
+  title: r.title,
+  cat: opt(r.cat),
+  condition: opt(r.condition),
+  result: opt(r.result),
+  advisory: opt(r.advisory),
+  totals: r.totals ?? {},
   createdAt: iso(r.created_at),
 })
 

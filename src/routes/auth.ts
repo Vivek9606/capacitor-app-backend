@@ -2,10 +2,11 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { signSession, signSignup, verifySignup } from '../auth.js'
 import { one, q, tx } from '../db.js'
-import { env } from '../env.js'
+import { adminPhones, env } from '../env.js'
 import { practice } from '../schemas.js'
 import { sendWhatsApp } from '../whatsapp.js'
-import { badRequest, HttpError, newId, normalizePhone, otpCode, safeEqual, sha256, slugify } from '../util.js'
+import * as M from '../mappers.js'
+import { badRequest, HttpError, linkToken, newId, normalizePhone, otpCode, safeEqual, sha256, slugify, todayIST } from '../util.js'
 
 const OTP_TTL_MIN = 10
 const OTP_MAX_ATTEMPTS = 5
@@ -47,7 +48,7 @@ export async function authRoutes(app: FastifyInstance) {
 
   // O3 · verify the code → session (existing user) or sign-up token (new physio)
   app.post('/auth/otp/verify', strict, async (req) => {
-    const body = z.object({ phone: z.string(), code: z.string().regex(/^\d{6}$/) }).parse(req.body)
+    const body = z.object({ phone: z.string(), code: z.string().regex(/^\d{6}$/), as: z.enum(['admin']).optional() }).parse(req.body)
     const phone = phoneOrThrow(body.phone)
     const row = await one<{ id: number; code_hash: string; attempts: number }>(
       'select id, code_hash, attempts from otp_codes where phone = $1 and not used and expires_at > now() order by created_at desc limit 1',
@@ -60,6 +61,12 @@ export async function authRoutes(app: FastifyInstance) {
       throw new HttpError(400, 'That code didn’t match. Check WhatsApp and try again.', 'otp_invalid')
     }
     await q('update otp_codes set used = true where id = $1', [row.id])
+
+    // Admin dashboard sign-in: only numbers listed in ADMIN_PHONES.
+    if (body.as === 'admin') {
+      if (!adminPhones.has(phone)) throw new HttpError(403, 'This number is not an admin.', 'forbidden')
+      return { token: signSession({ sub: phone, role: 'admin' }), role: 'admin', userId: phone }
+    }
 
     const acct = await accountFor(phone)
     if (acct) return { token: signSession({ sub: acct.id, role: acct.role }), role: acct.role, userId: acct.id }
@@ -120,6 +127,29 @@ export async function authRoutes(app: FastifyInstance) {
       return r.rows[0]
     })
     return { token: signSession({ sub: physio.id, role: 'physio' }), role: 'physio', userId: physio.id }
+  })
+
+  // A patient joining on their own (no physio yet). They take an assessment next and an admin assigns a physio.
+  app.post('/auth/signup-patient', strict, async (req) => {
+    const body = z
+      .object({
+        signupToken: z.string(),
+        name: z.string().trim().min(2).max(80),
+        age: z.number().int().min(1).max(120).optional(),
+        sex: z.enum(['F', 'M', 'O']).optional(),
+        city: z.string().trim().max(80).optional(),
+        email: z.string().trim().email().max(120).optional().or(z.literal('')),
+      })
+      .parse(req.body)
+    const phone = verifySignup(body.signupToken)
+    const existing = await accountFor(phone)
+    if (existing) return { token: signSession({ sub: existing.id, role: existing.role }), role: existing.role, userId: existing.id }
+    const row = await one(
+      `insert into patients (id, physio_id, phone, name, age, sex, city, email, since, link_token, consent_at, self_signup, match_status)
+       values ($1, null, $2, $3, $4, $5, $6, $7, $8, $9, now(), true, 'pending') returning *`,
+      [newId('pt'), phone, body.name, body.age ?? null, body.sex ?? null, body.city || null, body.email || null, todayIST(), linkToken()],
+    )
+    return { token: signSession({ sub: row!.id, role: 'patient' }), role: 'patient', userId: row!.id, patient: M.patient(row!) }
   })
 
   // Patient entry from WhatsApp: last 4 digits of the number the plan was sent to.

@@ -19,6 +19,8 @@ const schema = z.object({
   WHATSAPP_PHONE_NUMBER_ID: z.string().optional(),
   WHATSAPP_APP_SECRET: z.string().optional(),
   WHATSAPP_VERIFY_TOKEN: z.string().optional(),
+  /** Comma-separated phone numbers that can sign in to the admin dashboard (/admin). */
+  ADMIN_PHONES: z.string().default(''),
   OTP_DEV_CODE: z
     .string()
     .regex(/^\d{6}$/)
@@ -33,6 +35,7 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data
+export const adminPhones = new Set(env.ADMIN_PHONES.split(',').map((s) => s.replace(/\D/g, '').slice(-10)).filter(Boolean))
 export const isProd = env.NODE_ENV === 'production'
 
 if (isProd && env.OTP_DEV_CODE) {

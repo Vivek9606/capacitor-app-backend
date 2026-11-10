@@ -12,6 +12,7 @@ import { physioRoutes } from './routes/physio.js'
 import { practiceRoutes } from './routes/practice.js'
 import { publicRoutes } from './routes/public.js'
 import { webhookRoutes } from './routes/webhook.js'
+import { adminRoutes } from './routes/admin.js'
 import { HttpError } from './util.js'
 
 const app = Fastify({
@@ -60,6 +61,7 @@ await app.register(practiceRoutes)
 await app.register(patientRoutes)
 await app.register(publicRoutes)
 await app.register(webhookRoutes)
+await app.register(adminRoutes)
 
 startReminderJob()
 

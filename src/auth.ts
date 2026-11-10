@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken'
 import { env } from './env.js'
 import { HttpError } from './util.js'
 
-export type Role = 'physio' | 'patient'
+export type Role = 'physio' | 'patient' | 'admin'
 
 export interface SessionClaims {
   sub: string // physio id or patient id
@@ -35,7 +35,7 @@ export function sessionFrom(req: FastifyRequest): SessionClaims {
   if (!h?.startsWith('Bearer ')) throw new HttpError(401, 'Not logged in', 'unauthenticated')
   try {
     const p = jwt.verify(h.slice(7), env.JWT_SECRET, { issuer: ISSUER, audience: 'session', algorithms: ['HS256'] }) as jwt.JwtPayload
-    if (!p.sub || (p.role !== 'physio' && p.role !== 'patient')) throw new Error('bad claims')
+    if (!p.sub || !['physio', 'patient', 'admin'].includes(p.role)) throw new Error('bad claims')
     return { sub: p.sub, role: p.role }
   } catch {
     throw new HttpError(401, 'Session expired. Please log in again.', 'unauthenticated')
