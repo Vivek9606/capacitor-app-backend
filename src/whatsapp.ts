@@ -41,17 +41,23 @@ function buttonPayloads(t: Template): string[] {
   return []
 }
 
-export async function sendWhatsApp(t: Template): Promise<void> {
-  if (env.WHATSAPP_PROVIDER === 'log') {
-    // Never log OTP codes in production logs.
-    const shown = t.name === 'auth_otp' && process.env.NODE_ENV === 'production' ? '[code hidden]' : bodyParams(t).join(' | ')
-    console.log(`[whatsapp:${t.name}] to ${t.to.slice(0, 2)}******${t.to.slice(-2)} :: ${shown}`)
-    return
-  }
+const list = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean)
+const last10 = (phone: string) => phone.replace(/\D/g, '').slice(-10)
+const allowlist = new Set(list(env.WHATSAPP_ALLOWLIST).map(last10))
+const enabledTemplates = new Set(list(env.WHATSAPP_TEMPLATES))
 
-  const components: unknown[] = [{ type: 'body', parameters: bodyParams(t).map((text) => ({ type: 'text', text })) }]
-  if (t.name === 'auth_otp') components.push({ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: t.code }] })
-  buttonPayloads(t).forEach((payload, i) => components.push({ type: 'button', sub_type: 'quick_reply', index: String(i), parameters: [{ type: 'payload', payload }] }))
+function logOnly(t: Template, reason: string) {
+  // Never log OTP codes in production logs.
+  const shown = t.name === 'auth_otp' && process.env.NODE_ENV === 'production' ? '[code hidden]' : bodyParams(t).join(' | ')
+  console.log(`[whatsapp:${t.name}] ${reason} to ${t.to.slice(0, 2)}******${t.to.slice(-2)} :: ${shown}`)
+}
+
+export async function sendWhatsApp(t: Template): Promise<void> {
+  if (env.WHATSAPP_PROVIDER === 'log') return logOnly(t, 'logged')
+  if (allowlist.size > 0 && !allowlist.has(last10(t.to))) return logOnly(t, 'skipped (not in WHATSAPP_ALLOWLIST)')
+  if (enabledTemplates.size > 0 && !enabledTemplates.has(t.name)) return logOnly(t, 'skipped (not in WHATSAPP_TEMPLATES)')
+
+  if (env.WHATSAPP_PROVIDER === 'kwikengage') return sendKwikEngage(t)
 
   const res = await fetch(`https://graph.facebook.com/v21.0/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
     method: 'POST',
@@ -60,13 +66,43 @@ export async function sendWhatsApp(t: Template): Promise<void> {
       messaging_product: 'whatsapp',
       to: `91${t.to}`,
       type: 'template',
-      template: { name: t.name, language: { code: 'en' }, components },
+      template: { name: t.name, language: { code: 'en' }, components: components(t) },
     }),
   })
   if (!res.ok) {
     const body = await res.text()
     throw new Error(`WhatsApp send failed (${res.status}): ${body.slice(0, 300)}`)
   }
+}
+
+/** Meta-format template components: body variables {{1}}, {{2}}… plus any buttons. Used by both providers. */
+function components(t: Template): unknown[] {
+  const c: unknown[] = [{ type: 'body', parameters: bodyParams(t).map((text) => ({ type: 'text', text })) }]
+  if (t.name === 'auth_otp') c.push({ type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: t.code }] })
+  buttonPayloads(t).forEach((payload, i) => c.push({ type: 'button', sub_type: 'quick_reply', index: String(i), parameters: [{ type: 'payload', payload }] }))
+  return c
+}
+
+/**
+ * KwikEngage (GoKwik) send API. The raw API key goes in the Authorization header (no "Bearer").
+ * Verified with care_plan_shared (body variables). Button components use Meta's format and are
+ * untested on KwikEngage: test each button template before adding it to WHATSAPP_TEMPLATES.
+ * KwikEngage returns 201 even for payloads it can't use, so a "success" here is not proof of delivery.
+ */
+async function sendKwikEngage(t: Template): Promise<void> {
+  const res = await fetch(env.KWIKENGAGE_URL, {
+    method: 'POST',
+    headers: { Authorization: env.KWIKENGAGE_API_KEY!, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      to: `91${last10(t.to)}`,
+      channel: 'whatsapp',
+      type: 'template',
+      content: { type: 'template', template: { template_id: t.name, language: 'en', components: components(t) } },
+    }),
+  })
+  const body = await res.text()
+  if (!res.ok) throw new Error(`KwikEngage send failed (${res.status}): ${body.slice(0, 300)}`)
+  console.log(`[whatsapp:${t.name}] sent via KwikEngage to ${t.to.slice(0, 2)}******${t.to.slice(-2)} :: ${body.slice(0, 200)}`)
 }
 
 /** Fire-and-forget for non-critical messages: failures are logged, never break the request. */

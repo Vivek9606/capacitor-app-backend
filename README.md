@@ -62,6 +62,17 @@ Tables live in their own `app` schema with row-level security on and no policies
 
 You can also deploy to a Droplet with Docker: `docker build -t betterhood-api . && docker run -p 8080:8080 --env-file .env betterhood-api`.
 
+## WhatsApp via KwikEngage (current)
+
+The business number is connected through KwikEngage (GoKwik), so don't register it again on Meta's developer dashboard.
+
+- Set `WHATSAPP_PROVIDER=kwikengage` and `KWIKENGAGE_API_KEY`. The API takes the raw key in the `Authorization` header.
+- Request: `POST https://api.kwikengage.ai/send-message/v2` with `{ to: "91XXXXXXXXXX", channel: "whatsapp", type: "template", content: { type: "template", template: { template_id: "<name>", language: "en", components: [<Meta-format components>] } } }`.
+- KwikEngage returns `201 success` even when it ignores fields, so check the phone or KwikEngage's logs when testing a new template.
+- Verified: `care_plan_shared` (body variables). Button templates (bookings, `auth_otp`) are untested.
+- `WHATSAPP_TEMPLATES` lists the templates allowed to send. Add a template only after it's approved and tested.
+- `WHATSAPP_ALLOWLIST` limits sends to test numbers. Clear it only when going live.
+
 ## WhatsApp (Meta Cloud API)
 
 Create these templates in Meta Business Manager, language `en`. The body variables are in order:

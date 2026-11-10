@@ -8,7 +8,13 @@ const schema = z.object({
   NODE_ENV: z.string().default('development'),
   CORS_ORIGINS: z.string().default(''),
   PUBLIC_WEB_URL: z.string().url().default('https://betterhood.in'),
-  WHATSAPP_PROVIDER: z.enum(['log', 'meta']).default('log'),
+  WHATSAPP_PROVIDER: z.enum(['log', 'meta', 'kwikengage']).default('log'),
+  KWIKENGAGE_API_KEY: z.string().optional(),
+  KWIKENGAGE_URL: z.string().url().default('https://api.kwikengage.ai/send-message/v2'),
+  /** Comma-separated phone numbers. When set, WhatsApp goes only to these; everyone else is logged and skipped. */
+  WHATSAPP_ALLOWLIST: z.string().default(''),
+  /** Comma-separated template names approved on the provider. When set, other templates are only logged. */
+  WHATSAPP_TEMPLATES: z.string().default(''),
   WHATSAPP_TOKEN: z.string().optional(),
   WHATSAPP_PHONE_NUMBER_ID: z.string().optional(),
   WHATSAPP_APP_SECRET: z.string().optional(),
@@ -34,5 +40,9 @@ if (isProd && env.OTP_DEV_CODE) {
 }
 if (env.WHATSAPP_PROVIDER === 'meta' && (!env.WHATSAPP_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID)) {
   console.error('WHATSAPP_PROVIDER=meta needs WHATSAPP_TOKEN and WHATSAPP_PHONE_NUMBER_ID')
+  process.exit(1)
+}
+if (env.WHATSAPP_PROVIDER === 'kwikengage' && !env.KWIKENGAGE_API_KEY) {
+  console.error('WHATSAPP_PROVIDER=kwikengage needs KWIKENGAGE_API_KEY')
   process.exit(1)
 }
