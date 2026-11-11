@@ -127,6 +127,35 @@ export async function physioRoutes(app: FastifyInstance) {
     return M.patient(row!)
   })
 
+  // Discharge: the episode of care ends. Active plans are completed; the history stays.
+  app.post('/physio/patients/:id/discharge', async (req) => {
+    const me = requireRole(req, 'physio')
+    const { id: pid } = z.object({ id }).parse(req.params)
+    await ownPatient(me, pid)
+    const b = z
+      .object({
+        outcome: z.enum(['goals_met', 'improved', 'referred', 'stopped', 'other']),
+        note: z.string().trim().max(1000).default(''),
+        advice: z.string().trim().max(1000).default(''),
+      })
+      .parse(req.body)
+    const discharge = { ...b, at: new Date().toISOString() }
+    return tx(async (c) => {
+      const plans = (await c.query("update plans set status = 'completed', updated_at = now() where patient_id = $1 and physio_id = $2 and status = 'active' returning *", [pid, me])).rows
+      const row = (await c.query('update patients set discharged_at = now(), discharge = $2 where id = $1 returning *', [pid, JSON.stringify(discharge)])).rows[0]
+      return { patient: M.patient(row), plans: plans.map(M.plan) }
+    })
+  })
+
+  // Take a discharged patient on again (a new episode of care).
+  app.post('/physio/patients/:id/readmit', async (req) => {
+    const me = requireRole(req, 'physio')
+    const { id: pid } = z.object({ id }).parse(req.params)
+    await ownPatient(me, pid)
+    const row = await one('update patients set discharged_at = null where id = $1 returning *', [pid])
+    return M.patient(row!)
+  })
+
   // ---------- care plans (R4 send) ----------
   // Edit the active plan in place (same plan, same start date and logged sessions). The reason is logged.
   app.patch('/physio/plans/:id', async (req) => {
@@ -234,6 +263,7 @@ export async function physioRoutes(app: FastifyInstance) {
         minutes: z.number().int().min(5).max(480).optional(),
         reason: z.string().max(200).optional(),
         address: z.string().trim().max(300).optional(),
+        location: z.string().trim().max(300).optional(),
         isNewPatient: z.boolean().default(false),
         status: z.enum(['awaiting', 'confirmed', 'checked_in']),
         sendConfirmation: z.boolean().default(true),
@@ -247,9 +277,9 @@ export async function physioRoutes(app: FastifyInstance) {
     // A walk-in is someone at the clinic right now: no confirmation or reminder to send.
     const walkIn = b.source === 'walk_in' || b.status === 'checked_in'
     const row = await one(
-      `insert into bookings (id, physio_id, patient_id, patient_name, patient_phone, date, time, visit_type, minutes, reason, address, is_new_patient, status, send_confirmation, reminder, source, checked_in_at)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) returning *`,
-      [b.id ?? newId('bk'), me, b.patientId ?? null, b.patientName, phone, b.date, b.time, b.visitType, b.minutes ?? null, b.reason ?? null, b.address ?? null, b.isNewPatient, b.status, walkIn ? false : b.sendConfirmation, walkIn ? false : b.reminder, b.source, b.status === 'checked_in' ? new Date() : null],
+      `insert into bookings (id, physio_id, patient_id, patient_name, patient_phone, date, time, visit_type, minutes, reason, address, is_new_patient, status, send_confirmation, reminder, source, checked_in_at, location)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) returning *`,
+      [b.id ?? newId('bk'), me, b.patientId ?? null, b.patientName, phone, b.date, b.time, b.visitType, b.minutes ?? null, b.reason ?? null, b.address ?? null, b.isNewPatient, b.status, walkIn ? false : b.sendConfirmation, walkIn ? false : b.reminder, b.source, b.status === 'checked_in' ? new Date() : null, b.visitType === 'home_visit' ? null : b.location ?? null],
     )
     if (row!.send_confirmation) await sendBookingMessage(row!.id, 'booking_confirmation')
     return M.booking(row!)

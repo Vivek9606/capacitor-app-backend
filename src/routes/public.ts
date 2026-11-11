@@ -38,6 +38,7 @@ export async function publicRoutes(app: FastifyInstance) {
         visitType,
         reason: z.string().max(200).optional(),
         address: z.string().trim().max(300).optional(),
+        location: z.string().trim().max(300).optional(),
         // Honeypot: real users never fill this hidden field.
         website: z.string().max(0).optional(),
       })
@@ -54,9 +55,9 @@ export async function publicRoutes(app: FastifyInstance) {
     await assertSlotFree(ph, b.date, b.time, b.visitType, { forPatient: true })
     const existing = await one('select id from patients where physio_id = $1 and phone = $2', [ph.id, phone])
     const row = await one(
-      `insert into bookings (id, physio_id, patient_id, patient_name, patient_phone, date, time, visit_type, reason, address, is_new_patient, status, send_confirmation, reminder, source)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'requested',true,true,'public_profile') returning id, date, time, status`,
-      [newId('bk'), ph.id, existing?.id ?? null, b.name, phone, b.date, b.time, b.visitType, b.reason ?? null, b.visitType === 'home_visit' ? b.address ?? null : null, !existing],
+      `insert into bookings (id, physio_id, patient_id, patient_name, patient_phone, date, time, visit_type, reason, address, is_new_patient, status, send_confirmation, reminder, source, location)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'requested',true,true,'public_profile',$12) returning id, date, time, status`,
+      [newId('bk'), ph.id, existing?.id ?? null, b.name, phone, b.date, b.time, b.visitType, b.reason ?? null, b.visitType === 'home_visit' ? b.address ?? null : null, !existing, b.visitType === 'home_visit' ? null : b.location ?? null],
     )
     return { id: row!.id, date: row!.date, time: row!.time, status: row!.status }
   })

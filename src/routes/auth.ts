@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { createPhysio } from '../accounts.js'
-import { signSession, signSignup, verifySignup } from '../auth.js'
+import { sessionFrom, signSession, signSignup, verifySignup } from '../auth.js'
 import { one, q, tx } from '../db.js'
 import { adminPhones, env } from '../env.js'
 import { practice } from '../schemas.js'
@@ -118,6 +118,32 @@ export async function authRoutes(app: FastifyInstance) {
       [newId('pt'), phone, body.name, body.age ?? null, body.sex ?? null, body.city || null, body.email || null, todayIST(), linkToken()],
     )
     return { token: signSession({ sub: row!.id, role: 'patient' }), role: 'patient', userId: row!.id, patient: M.patient(row!) }
+  })
+
+  // Same number, other profile: a physio can use the app as a consumer and vice versa.
+  // → patient: their latest patient record, created (self sign-up) if they don't have one yet.
+  // → physio: their physio account, or a sign-up token for quick setup if they don't have one.
+  app.post('/auth/switch', strict, async (req) => {
+    const s = sessionFrom(req)
+    const { to } = z.object({ to: z.enum(['physio', 'patient']) }).parse(req.body)
+    if (s.role === 'admin') throw new HttpError(403, 'Not allowed for this account', 'forbidden')
+    const cur = await one<{ phone: string; name: string }>(`select phone, name from ${s.role === 'physio' ? 'physios' : 'patients'} where id = $1`, [s.sub])
+    if (!cur) throw new HttpError(401, 'Account not found', 'unauthenticated')
+    if (s.role === to) return { token: signSession({ sub: s.sub, role: to }), role: to, userId: s.sub }
+
+    if (to === 'physio') {
+      const ph = await one('select id from physios where phone = $1', [cur.phone])
+      if (ph) return { token: signSession({ sub: ph.id, role: 'physio' }), role: 'physio', userId: ph.id }
+      return { signupToken: signSignup(cur.phone) }
+    }
+    let pt = await one('select id from patients where phone = $1 order by created_at desc limit 1', [cur.phone])
+    if (!pt)
+      pt = await one(
+        `insert into patients (id, physio_id, phone, name, since, link_token, consent_at, self_signup, match_status)
+         values ($1, null, $2, $3, $4, $5, now(), true, 'pending') returning id`,
+        [newId('pt'), cur.phone, cur.name.replace(/^Dr\.?\s*/i, ''), todayIST(), linkToken()],
+      )
+    return { token: signSession({ sub: pt!.id, role: 'patient' }), role: 'patient', userId: pt!.id }
   })
 
   // Patient entry from WhatsApp: last 4 digits of the number the plan was sent to.

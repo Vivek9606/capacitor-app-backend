@@ -108,7 +108,7 @@ export async function patientRoutes(app: FastifyInstance) {
   app.post('/patient/bookings', async (req) => {
     const pid = requireRole(req, 'patient')
     const p = await withPhysio(pid)
-    const b = z.object({ id: id.optional(), date: isoDate, time: hhmm, visitType, reason: z.string().max(200).optional(), address: z.string().trim().max(300).optional() }).parse(req.body)
+    const b = z.object({ id: id.optional(), date: isoDate, time: hhmm, visitType, reason: z.string().max(200).optional(), address: z.string().trim().max(300).optional(), location: z.string().trim().max(300).optional() }).parse(req.body)
     if (b.date < todayIST()) throw badRequest('Pick a future date')
     if (b.visitType === 'home_visit' && !b.address) throw badRequest('Add the address for the home visit')
     const open = await one("select count(*)::int as n from bookings where patient_id = $1 and status = 'requested' and date >= $2", [pid, todayIST()])
@@ -116,9 +116,9 @@ export async function patientRoutes(app: FastifyInstance) {
     const physio = await one('select * from physios where id = $1', [p.physio_id])
     await assertSlotFree(physio!, b.date, b.time, b.visitType, { forPatient: true })
     const row = await one(
-      `insert into bookings (id, physio_id, patient_id, patient_name, patient_phone, date, time, visit_type, reason, address, is_new_patient, status, send_confirmation, reminder, source)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,false,'requested',true,true,'physio') returning *`,
-      [b.id ?? newId('bk'), p.physio_id, pid, p.name, p.phone, b.date, b.time, b.visitType, b.reason ?? null, b.visitType === 'home_visit' ? b.address ?? null : null],
+      `insert into bookings (id, physio_id, patient_id, patient_name, patient_phone, date, time, visit_type, reason, address, is_new_patient, status, send_confirmation, reminder, source, location)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,false,'requested',true,true,'physio',$11) returning *`,
+      [b.id ?? newId('bk'), p.physio_id, pid, p.name, p.phone, b.date, b.time, b.visitType, b.reason ?? null, b.visitType === 'home_visit' ? b.address ?? null : null, b.visitType === 'home_visit' ? null : b.location ?? null],
     )
     return M.booking(row!)
   })

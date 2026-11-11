@@ -65,6 +65,8 @@ export const patient = (r: Row) => ({
   email: opt(r.email),
   selfSignup: r.self_signup || undefined,
   match: r.match_status ? { status: r.match_status, suggestedPhysioId: opt(r.suggested_physio_id) } : undefined,
+  dischargedAt: iso(r.discharged_at),
+  discharge: r.discharge ?? undefined,
 })
 
 export const assessment = (r: Row) => ({
@@ -136,6 +138,7 @@ export const booking = (r: Row) => ({
   source: r.source,
   minutes: opt(r.minutes),
   address: opt(r.address),
+  location: opt(r.location),
   checkedInAt: iso(r.checked_in_at),
   createdAt: iso(r.created_at),
 })

@@ -15,6 +15,9 @@ export const planItem = z.object({
 })
 
 export const rx = z.object({
+  // Consultation (step 1 of the plan flow)
+  complaint: z.string().max(1000).optional(),
+  findings: z.string().max(2000).optional(),
   diagnosis: z.string().max(300),
   advice: z.string().max(3000),
   modalities: z.array(z.string().max(40)).max(20),
