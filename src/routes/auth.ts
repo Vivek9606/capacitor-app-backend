@@ -1,12 +1,13 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
+import { createPhysio } from '../accounts.js'
 import { signSession, signSignup, verifySignup } from '../auth.js'
 import { one, q, tx } from '../db.js'
 import { adminPhones, env } from '../env.js'
 import { practice } from '../schemas.js'
 import { sendWhatsApp } from '../whatsapp.js'
 import * as M from '../mappers.js'
-import { badRequest, HttpError, linkToken, newId, normalizePhone, otpCode, safeEqual, sha256, slugify, todayIST } from '../util.js'
+import { badRequest, HttpError, linkToken, newId, normalizePhone, otpCode, safeEqual, sha256, todayIST } from '../util.js'
 
 const OTP_TTL_MIN = 10
 const OTP_MAX_ATTEMPTS = 5
@@ -90,43 +91,9 @@ export async function authRoutes(app: FastifyInstance) {
     const phone = verifySignup(body.signupToken)
     if (await one('select 1 from physios where phone = $1', [phone])) throw new HttpError(409, 'An account already exists for this number. Log in instead.', 'exists')
 
-    const name = /^dr\.?\s/i.test(body.name) ? body.name : `Dr. ${body.name}`
-    const id = newId('ph')
-    const base = slugify(name) || 'physio'
-    const slug = (await one('select 1 from physios where slug = $1', [base])) ? `${base}-${id.slice(-4)}` : base
-    const first = (name.replace(/^Dr\.?\s*/i, '').split(' ')[0] || 'PHYSIO').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 8) || 'PHYSIO'
-    let inviteCode = `${first}-BH`
-    if (await one('select 1 from physios where invite_code = $1', [inviteCode])) inviteCode = `${first}-${id.slice(-3).toUpperCase()}`
-
-    const physio = await tx(async (c) => {
-      const referrer = body.referredBy ? (await c.query('select id from physios where invite_code = $1', [body.referredBy.toUpperCase()])).rows[0] : undefined
-      const r = await c.query(
-        `insert into physios (id, phone, name, email, focus_areas, practice_settings, slug, consult, invite_code, referred_by, practice)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning *`,
-        [
-          id,
-          phone,
-          name,
-          body.email || null,
-          body.focusAreas,
-          body.practiceSettings,
-          slug,
-          {
-            inClinic: { enabled: !body.practice || body.practice.modes.some((m) => m !== 'home'), fee: 600, minutes: 45 },
-            homeVisit: { enabled: !!body.practice?.modes.includes('home'), fee: 1000, radiusKm: 5, minutes: 60 },
-          },
-          inviteCode,
-          referrer?.id ?? null,
-          body.practice ? JSON.stringify(body.practice) : null,
-        ],
-      )
-      if (referrer) {
-        // Upgrade a pending invite if the referrer added one, else record a new "joined".
-        const up = await c.query("update referrals set status = 'joined', referred_id = $2 where id = (select id from referrals where referrer_id = $1 and status = 'pending' and referred_id is null order by at limit 1) returning id", [referrer.id, id])
-        if (!up.rowCount) await c.query("insert into referrals (id, referrer_id, referred_id, name, status) values ($1,$2,$3,$4,'joined')", [newId('rf'), referrer.id, id, name])
-      }
-      return r.rows[0]
-    })
+    const physio = await tx((c) =>
+      createPhysio(c, { phone, name: body.name, email: body.email, focusAreas: body.focusAreas, practiceSettings: body.practiceSettings, practice: body.practice, referredBy: body.referredBy }),
+    )
     return { token: signSession({ sub: physio.id, role: 'physio' }), role: 'physio', userId: physio.id }
   })
 

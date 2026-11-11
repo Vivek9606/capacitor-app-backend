@@ -62,6 +62,29 @@ Tables live in their own `app` schema with row-level security on and no policies
 
 You can also deploy to a Droplet with Docker: `docker build -t betterhood-api . && docker run -p 8080:8080 --env-file .env betterhood-api`.
 
+## Physio directory (betterhood.in)
+
+Physios list themselves at `betterhood.in/physio-directory/join/`. The app opens that same page for signed-in physios.
+
+- `POST /directory/signup`: new number (OTP sign-up token) → physio account + live listing. It's the same account the app uses, so the physio logs in to the app with the same number.
+- `GET` / `PUT /directory/me` (physio session): their listing, or a prefill from their app profile. The URL (`/physio/{slug}/`) is fixed once published. Qualification, experience, photo and registration number are copied to the app profile. A registration number puts the physio in the admin verification queue.
+- `GET /public/directory`: every live listing in the website's profile shape. The website build pulls this (`scripts/sync-directory.mjs`). `GET /public/directory/:slug/photo` serves the photo.
+- `POST /admin/directory/:physioId/status` `{status: live|hidden}`: listings go live without review. This takes one down.
+- Slugs never clash with the profiles carried over from WordPress: the server reads `{PUBLIC_SITE_URL}/physios-index.json`.
+- Going live: with `SITE_REBUILD_REPO` + `SITE_REBUILD_TOKEN` set, each save sends a `repository_dispatch` (`directory-updated`) to the website repo, batched over 20 s. The site rebuilds and deploys in a few minutes, and the form shows when the page is live.
+- Add the website's origin to `CORS_ORIGINS`. Set `PUBLIC_APP_URL` to where the app's web build runs, so the website's "Book a session" button lands on the booking page.
+
+## Video consults (LiveKit)
+
+Bookings with visit type `teleconsult` become 1:1 video calls between the physio and patient inside the app.
+
+- `POST /bookings/:id/call` (physio or patient session) returns a LiveKit token for room `bk_<bookingId>`.
+  - Only that booking's physio and patient can get one.
+  - The call opens 15 min before the start time and closes 30 min after the booked end.
+- Set `LIVEKIT_URL` (`wss://<project>.livekit.cloud`), `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` from LiveKit Cloud → Settings → Keys. Without them the endpoint returns `503 video_disabled`.
+- Local testing: run `livekit-server --dev`, then use `ws://localhost:7880` with key `devkey` and secret `secret`.
+- Nothing is recorded.
+
 ## WhatsApp via KwikEngage (current)
 
 The business number is connected through KwikEngage (GoKwik), so don't register it again on Meta's developer dashboard.

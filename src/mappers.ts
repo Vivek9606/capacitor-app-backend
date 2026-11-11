@@ -78,6 +78,8 @@ export const assessment = (r: Row) => ({
   result: opt(r.result),
   advisory: opt(r.advisory),
   totals: r.totals ?? {},
+  kind: r.kind ?? 'pain',
+  scores: opt(r.scores),
   createdAt: iso(r.created_at),
 })
 

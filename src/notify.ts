@@ -14,7 +14,8 @@ export async function sendBookingMessage(bookingId: string, kind: 'booking_confi
     [bookingId],
   )
   if (!b) return
-  const where = b.visit_type === 'home_visit' ? 'Home visit' : b.clinic?.address ? `${b.clinic.name}, ${b.clinic.address}` : b.physio_name
+  const where =
+    b.visit_type === 'home_visit' ? 'Home visit' : b.visit_type === 'teleconsult' ? 'Video call in the Betterhood app' : b.clinic?.address ? `${b.clinic.name}, ${b.clinic.address}` : b.physio_name
   sendLater({
     name: kind,
     to: b.patient_phone,

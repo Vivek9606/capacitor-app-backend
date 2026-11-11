@@ -7,7 +7,8 @@ pg.types.setTypeParser(1082, (v) => v)
 export const pool = new pg.Pool({
   connectionString: env.DATABASE_URL,
   // Supabase requires TLS. Its pooler certificate chain isn't in Node's default store.
-  ssl: { rejectUnauthorized: false },
+  // A local Postgres (dev/testing) has no TLS.
+  ssl: /@(localhost|127\.0\.0\.1)[:/]/.test(env.DATABASE_URL) ? false : { rejectUnauthorized: false },
   max: 10,
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 10_000,

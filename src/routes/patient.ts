@@ -23,33 +23,39 @@ async function withPhysio(patientId: string) {
 }
 
 export async function patientRoutes(app: FastifyInstance) {
-  // Save a pain-assessment result. For someone without a physio, suggest one for the admin to confirm.
+  // Save a result from one of the website's assessments, taken inside the app (pain, health level 2 or longevity).
+  // For someone without a physio, a pain result suggests one for the admin to confirm.
+  const score = z.number().min(0).max(100).nullable().optional()
   app.post('/patient/assessments', async (req) => {
     const pid = requireRole(req, 'patient')
     const b = z
       .object({
         id: id.optional(),
-        slug: z.string().max(80),
-        area: z.enum(['back', 'neck', 'shoulder', 'knee']),
+        slug: z.string().regex(/^assessment-[a-z0-9-]+$/).max(80),
+        kind: z.enum(['pain', 'health', 'longevity']).default('pain'),
+        area: z.enum(['back', 'neck', 'shoulder', 'knee', 'overall']),
         title: z.string().max(120),
         cat: z.enum(['muscle', 'nerve', 'bone', 'joint']).optional(),
         condition: z.string().max(200).optional(),
         result: z.string().max(120).optional(),
         advisory: z.string().max(2000).optional(),
         totals: z.record(z.string(), z.number()).optional(),
+        scores: z.object({ overall: score, strength: score, balance: score, mobility: score }).optional(),
       })
       .parse(req.body)
     const p = await me(pid)
     const row = await one(
-      'insert into assessments (id, patient_id, slug, area, title, cat, condition, result, advisory, totals) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning *',
-      [b.id ?? newId('as'), pid, b.slug, b.area, b.title, b.cat ?? null, b.condition ?? null, b.result ?? null, b.advisory ?? null, JSON.stringify(b.totals ?? {})],
+      `insert into assessments (id, patient_id, slug, kind, area, title, cat, condition, result, advisory, totals, scores)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) on conflict (id) do nothing returning *`,
+      [b.id ?? newId('as'), pid, b.slug, b.kind, b.area, b.title, b.cat ?? null, b.condition ?? null, b.result ?? null, b.advisory ?? null, JSON.stringify(b.totals ?? {}), b.scores ? JSON.stringify(b.scores) : null],
     )
+    if (!row) throw new HttpError(409, 'This result was already saved', 'exists')
     let patient = p
-    if (!p.physio_id && p.match_status !== 'confirmed') {
+    if (b.kind === 'pain' && !p.physio_id && p.match_status !== 'confirmed') {
       const sug = await suggestPhysio(b.cat, p.city ?? undefined)
       patient = (await one("update patients set suggested_physio_id = $2, match_status = $3, condition = coalesce(condition, $4) where id = $1 returning *", [pid, sug ?? null, sug ? 'suggested' : 'pending', b.condition ?? null]))!
     }
-    return { assessment: M.assessment(row!), patient: M.patient(patient) }
+    return { assessment: M.assessment(row), patient: M.patient(patient) }
   })
 
   app.patch('/patient/profile', async (req) => {
