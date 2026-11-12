@@ -78,7 +78,7 @@ Physios list themselves at `betterhood.in/physio-directory/join/`. The app opens
 
 The web app's `/admin` page (numbers in `ADMIN_PHONES`) shows the consumer journey and the physio journey.
 
-- `GET /admin/journeys`: one row per consumer and per physio with their stage, milestones and last activity, milestone counts, 12 weekly trends, and what came in from the website.
+- `GET /admin/journeys`: one row per consumer and per physio with their stage, milestones and last activity; a daily series for the last 180 days (sign-ups, sessions, bookings, plans, money collected, website submissions); retention by the week a care plan was sent; and what came in from the website. The dashboard works out period comparisons, funnels and insights from this.
 - `GET /admin/timeline/:type/:id` (`patient` | `physio` | `lead`): everything that happened for one of them, plus the admins' notes and tags. Message text is never included.
 - `POST /admin/notes`, `DELETE /admin/notes/:id`, `PUT /admin/tags`: internal notes and follow-up tags. These are the only things an admin can write here.
 - `POST /public/web/submissions`: the website sends every lead form and every assessment result taken outside the app (`web_submissions`). A phone number, when the visitor gave one, links it to an app account.

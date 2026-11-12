@@ -31,6 +31,7 @@ const CONSUMER_SQL = `
   select p.id, p.name, p.phone, p.city, p.physio_id, ph.name as physio_name, p.self_signup, p.condition,
          p.created_at, p.last_seen_at, p.consent_at, p.discharged_at,
          a.n as assessments, a.first_at as first_assessment_at, a.last_at as last_assessment_at,
+         (select area from assessments where patient_id = p.id and kind = 'pain' order by created_at desc limit 1) as pain_area,
          b.n as bookings, b.first_at as first_booking_at, b.last_at as last_booking_at,
          pl.n as plans, pl.first_at as first_plan_at, pl.opened_at as plan_opened_at,
          s.done as sessions_done, s.skipped as sessions_skipped, s.first_date as first_session_date, s.last_date as last_session_date,
@@ -62,6 +63,7 @@ function consumer(r: Row) {
     phone: r.phone as string,
     city: r.city ?? undefined,
     condition: r.condition ?? undefined,
+    painArea: r.pain_area ?? undefined,
     physioId: r.physio_id ?? undefined,
     physioName: r.physio_name ?? undefined,
     origin: r.self_signup ? 'self' : 'physio',
@@ -200,9 +202,75 @@ const webSubmission = (r: Row) => ({
 
 const step = (label: string, n: number, hint?: string) => ({ label, n, hint })
 
+const DAYS = 180
+const IST = "at time zone 'Asia/Kolkata'"
+const METRICS = ['consumers', 'physios', 'assessments', 'web', 'bookings', 'plans', 'sessions', 'skipped', 'revenue'] as const
+type Metric = (typeof METRICS)[number]
+
+/** One row per day for the last 180 days (India time), oldest first, with a count for each metric. */
+async function dailySeries() {
+  const since = `(now() ${IST})::date - ${DAYS - 1}`
+  const ts = (table: string, col: string, where = 'true', value = 'count(*)') =>
+    q<{ day: string; n: number }>(`select to_char((${col} ${IST})::date, 'YYYY-MM-DD') as day, ${value}::int as n from ${table} where ${where} and (${col} ${IST})::date >= ${since} group by 1`)
+  const sl = (status: string) => q<{ day: string; n: number }>(`select date as day, count(*)::int as n from session_logs where status = '${status}' and date >= ${since} group by 1`)
+  const parts: Record<Metric, { day: string; n: number }[]> = Object.fromEntries(
+    await Promise.all(
+      (
+        [
+          ['consumers', ts('patients', 'created_at')],
+          ['physios', ts('physios', 'created_at')],
+          ['assessments', ts('assessments', 'created_at')],
+          ['web', ts('web_submissions', 'created_at')],
+          ['bookings', ts('bookings', 'created_at')],
+          ['plans', ts('plans', 'sent_at')],
+          ['sessions', sl('done')],
+          ['skipped', sl('skipped')],
+          ['revenue', ts('invoices', 'paid_at', "status = 'paid' and paid_at is not null", 'coalesce(sum(total), 0)')],
+        ] as [Metric, Promise<{ day: string; n: number }[]>][]
+      ).map(async ([k, v]) => [k, await v]),
+    ),
+  )
+  const today = (await one<{ d: string }>(`select to_char((now() ${IST})::date, 'YYYY-MM-DD') as d`))!.d
+  const [y, m, d] = today.split('-').map(Number)
+  const days = Array.from({ length: DAYS }, (_, i) => new Date(Date.UTC(y, m - 1, d - (DAYS - 1 - i))).toISOString().slice(0, 10))
+  const idx = new Map(days.map((x, i) => [x, i]))
+  const out = days.map((day) => ({ day, ...(Object.fromEntries(METRICS.map((k) => [k, 0])) as Record<Metric, number>) }))
+  for (const k of METRICS) for (const r of parts[k]) if (idx.has(String(r.day))) out[idx.get(String(r.day))!][k] = r.n
+  return out
+}
+
+/**
+ * Retention by the week a consumer got their first care plan: how many of them did at least one session
+ * in week 0, 1, 2... counted from their own plan date. Last 12 weekly cohorts, oldest first.
+ */
+async function planCohorts() {
+  const fp = `select patient_id, min((sent_at ${IST})::date) as d0 from plans group by 1`
+  const [sizes, kept] = await Promise.all([
+    q<{ cohort: string; size: number }>(`select to_char(date_trunc('week', d0::timestamp), 'YYYY-MM-DD') as cohort, count(*)::int as size from (${fp}) fp where d0 >= (now() ${IST})::date - 83 group by 1 order by 1`),
+    q<{ cohort: string; wk: number; n: number }>(
+      `select to_char(date_trunc('week', fp.d0::timestamp), 'YYYY-MM-DD') as cohort, ((sl.date - fp.d0) / 7)::int as wk, count(distinct fp.patient_id)::int as n
+       from (${fp}) fp join plans x on x.patient_id = fp.patient_id join session_logs sl on sl.plan_id = x.id and sl.status = 'done' and sl.date >= fp.d0
+       where fp.d0 >= (now() ${IST})::date - 83 group by 1, 2`,
+    ),
+  ])
+  return sizes.map((c) => {
+    const weeks: number[] = []
+    for (const k of kept) if (k.cohort === c.cohort && k.wk >= 0 && k.wk < 8) weeks[k.wk] = k.n
+    return { cohort: c.cohort, size: c.size, weeks: Array.from({ length: 8 }, (_, i) => weeks[i] ?? 0) }
+  })
+}
+
 export async function adminJourneyRoutes(app: FastifyInstance) {
   app.get('/admin/journeys', async (req) => {
     requireRole(req, 'admin')
+    const [daily, cohorts, sessionDays, bookingRows, assessmentRows] = await Promise.all([
+      dailySeries(),
+      planCohorts(),
+      // Who exercised on which day (for "consumers exercising" in any period).
+      q<{ day: string; patient_id: string; physio_id: string }>(`select distinct sl.date as day, x.patient_id, x.physio_id from session_logs sl join plans x on x.id = sl.plan_id where sl.status = 'done' and sl.date >= (now() ${IST})::date - ${DAYS - 1}`),
+      q(`select to_char((created_at ${IST})::date, 'YYYY-MM-DD') as day, visit_type, source, status from bookings where (created_at ${IST})::date >= (now() ${IST})::date - ${DAYS - 1}`),
+      q(`select to_char((created_at ${IST})::date, 'YYYY-MM-DD') as day, kind, area from assessments where (created_at ${IST})::date >= (now() ${IST})::date - ${DAYS - 1}`),
+    ])
     const [cRows, pRows, wRows, web, weeks] = await Promise.all([
       q(`${CONSUMER_SQL} order by p.created_at desc limit 5000`),
       q(`${PHYSIO_SQL} order by ph.created_at desc limit 5000`),
@@ -237,6 +305,11 @@ export async function adminJourneyRoutes(app: FastifyInstance) {
       physios,
       web: { ...web, recent: wRows.map(webSubmission) },
       weeks,
+      daily,
+      cohorts,
+      sessionDays: sessionDays.map((r) => [String(r.day), r.patient_id, r.physio_id] as const),
+      bookingEvents: bookingRows.map((r) => ({ day: r.day as string, type: r.visit_type as string, source: r.source as string, status: r.status as string })),
+      assessmentEvents: assessmentRows.map((r) => ({ day: r.day as string, kind: r.kind as string, area: r.area as string })),
       // Milestones, not a strict funnel: each bar counts everyone who has done that thing.
       consumerSteps: [
         step('Accounts', consumers.length),
