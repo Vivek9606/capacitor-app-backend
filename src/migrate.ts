@@ -11,7 +11,8 @@ const dir = join(here, '..', 'migrations')
 async function main() {
   const url = process.env.DATABASE_URL
   if (!url) throw new Error('DATABASE_URL is required')
-  const client = new pg.Client({ connectionString: url, ssl: { rejectUnauthorized: false } })
+  // Tables live in the "app" schema (see 001); default to it so a migration that forgets `set search_path` still works.
+  const client = new pg.Client({ connectionString: url, ssl: { rejectUnauthorized: false }, options: '-c search_path=app' })
   await client.connect()
   try {
     await client.query('create table if not exists public.betterhood_migrations (name text primary key, applied_at timestamptz not null default now())')

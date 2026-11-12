@@ -1,4 +1,5 @@
 -- Patient discharge (end of an episode of care) and the practice a booking is for.
+set search_path = app;
 
 -- Discharged patients keep their history; discharged_at is cleared when the physio takes them on again.
 alter table patients add column if not exists discharged_at timestamptz;
