@@ -9,6 +9,11 @@ import { HttpError } from '../util.js'
  * The app loads this once after login and keeps it in memory; actions then call the
  * specific endpoints and patch local state.
  */
+/** Opening the app counts as being active (admin dashboard). Written at most once every 5 minutes; never blocks the response. */
+function seen(table: 'physios' | 'patients', id: string) {
+  q(`update ${table} set last_seen_at = now() where id = $1 and (last_seen_at is null or last_seen_at < now() - interval '5 minutes')`, [id]).catch(() => {})
+}
+
 export async function meRoutes(app: FastifyInstance) {
   app.get('/me/bootstrap', async (req) => {
     const s = sessionFrom(req)
@@ -17,6 +22,7 @@ export async function meRoutes(app: FastifyInstance) {
     if (s.role === 'physio') {
       const me = await one('select * from physios where id = $1', [s.sub])
       if (!me) throw new HttpError(401, 'Account not found', 'unauthenticated')
+      seen('physios', s.sub)
       const [patients, plans, sessions, bookings, messages, referrals, templates, blocks, groups, invoices, consents, assessments] = await Promise.all([
         q('select * from patients where physio_id = $1 order by name', [s.sub]),
         q('select * from plans where physio_id = $1 order by sent_at', [s.sub]),
@@ -56,6 +62,7 @@ export async function meRoutes(app: FastifyInstance) {
 
     const me = await one('select * from patients where id = $1', [s.sub])
     if (!me) throw new HttpError(401, 'Account not found', 'unauthenticated')
+    seen('patients', s.sub)
     const physio = me.physio_id ? await one('select * from physios where id = $1', [me.physio_id]) : undefined
     const assessments = await q('select * from assessments where patient_id = $1 order by created_at', [s.sub])
     // Opening the app counts as opening the plan (plans sent after they first consented included).

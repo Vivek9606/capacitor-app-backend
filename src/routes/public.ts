@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { assertSlotFree, availabilityOf, publicCalendar } from '../calendar.js'
-import { one, tx } from '../db.js'
+import { one, q, tx } from '../db.js'
 import * as M from '../mappers.js'
 import { hhmm, isoDate, visitType } from '../schemas.js'
 import { addDays, badRequest, HttpError, newId, normalizePhone, notFound, todayIST } from '../util.js'
@@ -73,5 +73,27 @@ export async function publicRoutes(app: FastifyInstance) {
     const existing = await one('select id from patients where physio_id = $1 and phone = $2', [ph.id, phone])
     const row = await tx((c) => joinGroup(c, gid, ph.id, { patientId: existing?.id, name: b.name, phone }, { publicOnly: true }))
     return M.groupPublic(row)
+  })
+  // P4 · what a visitor submits on betterhood.in: a lead form, or an assessment result taken outside the app.
+  // Shows up in the admin dashboard; the phone number (when given) links it to an app account.
+  app.post('/public/web/submissions', { config: { rateLimit: { max: 30, timeWindow: '1 hour' } } }, async (req) => {
+    const b = z
+      .object({
+        kind: z.enum(['form', 'assessment']),
+        form: z.string().trim().min(1).max(80),
+        page: z.string().max(300).optional(),
+        name: z.string().trim().max(120).optional(),
+        phone: z.string().max(30).optional(),
+        email: z.string().trim().max(160).optional(),
+        data: z.record(z.string(), z.unknown()).default({}),
+        website: z.string().max(0).optional(), // honeypot
+      })
+      .parse(req.body)
+    const data = JSON.stringify(b.data)
+    if (data.length > 20_000) throw badRequest('That submission is too large')
+    await q('insert into web_submissions (id, kind, form, page, name, phone, email, data) values ($1,$2,$3,$4,$5,$6,$7,$8)', [
+      newId('ws'), b.kind, b.form, b.page ?? null, b.name || null, (b.phone && normalizePhone(b.phone)) ?? null, b.email || null, data,
+    ])
+    return { ok: true }
   })
 }

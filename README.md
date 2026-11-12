@@ -74,6 +74,17 @@ Physios list themselves at `betterhood.in/physio-directory/join/`. The app opens
 - Going live: with `SITE_REBUILD_REPO` + `SITE_REBUILD_TOKEN` set, each save sends a `repository_dispatch` (`directory-updated`) to the website repo, batched over 20 s. The site rebuilds and deploys in a few minutes, and the form shows when the page is live.
 - Add the website's origin to `CORS_ORIGINS`. Set `PUBLIC_APP_URL` to where the app's web build runs, so the website's "Book a session" button lands on the booking page.
 
+## Admin dashboard (journeys)
+
+The web app's `/admin` page (numbers in `ADMIN_PHONES`) shows the consumer journey and the physio journey.
+
+- `GET /admin/journeys`: one row per consumer and per physio with their stage, milestones and last activity, milestone counts, 12 weekly trends, and what came in from the website.
+- `GET /admin/timeline/:type/:id` (`patient` | `physio` | `lead`): everything that happened for one of them, plus the admins' notes and tags. Message text is never included.
+- `POST /admin/notes`, `DELETE /admin/notes/:id`, `PUT /admin/tags`: internal notes and follow-up tags. These are the only things an admin can write here.
+- `POST /public/web/submissions`: the website sends every lead form and every assessment result taken outside the app (`web_submissions`). A phone number, when the visitor gave one, links it to an app account.
+- `last_seen_at` on physios and patients is set by `/me/bootstrap` (at most every 5 minutes).
+- "Active" means something happened in the last 7 days, "slipping" 8 to 21 days, "inactive" longer.
+
 ## Video consults (LiveKit)
 
 Bookings with visit type `teleconsult` become 1:1 video calls between the physio and patient inside the app.
