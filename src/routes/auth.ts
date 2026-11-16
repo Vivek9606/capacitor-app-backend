@@ -173,7 +173,7 @@ export async function authRoutes(app: FastifyInstance) {
     }
   })
 
-  // Public preview for the plan link page — no health details before verification.
+  // Public preview for the plan link page, no health details before verification.
   app.get('/public/plan-link/:token', async (req) => {
     const { token } = z.object({ token: z.string().max(64) }).parse(req.params)
     const r = await one(

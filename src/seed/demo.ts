@@ -49,7 +49,7 @@ await tx(async (c) => {
             ('bk_newreq01','ph_ananya',null,'Arjun Mehta','9900112233',$2,'11:00','in_clinic','Knee pain after running','requested','public_profile')`,
     [addDays(t, 2), addDays(t, 1)],
   )
-  await c.query("insert into messages (id, physio_id, patient_id, sender, text, at) values ('m_demo001','ph_ananya','pt_riyasharma','patient','Bird dog feels a bit tricky on the left side — is that normal?', now() - interval '3 hours')")
+  await c.query("insert into messages (id, physio_id, patient_id, sender, text, at) values ('m_demo001','ph_ananya','pt_riyasharma','patient','Bird dog feels a bit tricky on the left side, is that normal?', now() - interval '3 hours')")
 
   // Practice modes, weekly hours, billing, course progress.
   const weekday = [

@@ -51,7 +51,7 @@ export const adminPhones = new Set(env.ADMIN_PHONES.split(',').map((s) => s.repl
 export const isProd = env.NODE_ENV === 'production'
 
 if (isProd && env.OTP_DEV_CODE) {
-  console.warn('WARNING: OTP_DEV_CODE is set in production — anyone can log in as any number. Remove it.')
+  console.warn('WARNING: OTP_DEV_CODE is set in production: anyone can log in as any number. Remove it.')
 }
 if (env.WHATSAPP_PROVIDER === 'meta' && (!env.WHATSAPP_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID)) {
   console.error('WHATSAPP_PROVIDER=meta needs WHATSAPP_TOKEN and WHATSAPP_PHONE_NUMBER_ID')

@@ -16,6 +16,7 @@ import { adminRoutes } from './routes/admin.js'
 import { adminJourneyRoutes } from './routes/adminJourneys.js'
 import { videoRoutes } from './routes/video.js'
 import { directoryRoutes } from './routes/directory.js'
+import { accountRoutes } from './routes/account.js'
 import { HttpError } from './util.js'
 
 const app = Fastify({
@@ -68,6 +69,7 @@ await app.register(adminRoutes)
 await app.register(adminJourneyRoutes)
 await app.register(videoRoutes)
 await app.register(directoryRoutes)
+await app.register(accountRoutes)
 
 startReminderJob()
 

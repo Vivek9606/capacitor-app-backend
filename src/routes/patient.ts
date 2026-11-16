@@ -7,7 +7,7 @@ import * as M from '../mappers.js'
 import { hhmm, id, isoDate, signature, visitType } from '../schemas.js'
 import { addDays, badRequest, HttpError, newId, notFound, todayIST } from '../util.js'
 import { joinGroup } from './practice.js'
-import { suggestPhysio } from '../match.js'
+import { physioByRef, suggestPhysio } from '../match.js'
 
 async function me(patientId: string) {
   const p = await one('select * from patients where id = $1', [patientId])
@@ -41,17 +41,29 @@ export async function patientRoutes(app: FastifyInstance) {
         advisory: z.string().max(2000).optional(),
         totals: z.record(z.string(), z.number()).optional(),
         scores: z.object({ overall: score, strength: score, balance: score, mobility: score }).optional(),
+        // 'web' = taken on betterhood.in while signed in (or saved on sign-in); the app's own runs are 'app'
+        source: z.enum(['app', 'web']).default('app'),
+        // Taken from a physio's invite link (betterhood.in/...?physio=<ref>): link the patient to that physio.
+        invitedBy: z.string().max(80).optional(),
       })
       .parse(req.body)
     const p = await me(pid)
     const row = await one(
-      `insert into assessments (id, patient_id, slug, kind, area, title, cat, condition, result, advisory, totals, scores)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) on conflict (id) do nothing returning *`,
-      [b.id ?? newId('as'), pid, b.slug, b.kind, b.area, b.title, b.cat ?? null, b.condition ?? null, b.result ?? null, b.advisory ?? null, JSON.stringify(b.totals ?? {}), b.scores ? JSON.stringify(b.scores) : null],
+      `insert into assessments (id, patient_id, slug, kind, area, title, cat, condition, result, advisory, totals, scores, source)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) on conflict (id) do nothing returning *`,
+      [b.id ?? newId('as'), pid, b.slug, b.kind, b.area, b.title, b.cat ?? null, b.condition ?? null, b.result ?? null, b.advisory ?? null, JSON.stringify(b.totals ?? {}), b.scores ? JSON.stringify(b.scores) : null, b.source],
     )
     if (!row) throw new HttpError(409, 'This result was already saved', 'exists')
     let patient = p
-    if (b.kind === 'pain' && !p.physio_id && p.match_status !== 'confirmed') {
+    const inviter = !p.physio_id && b.invitedBy ? await physioByRef(b.invitedBy) : undefined
+    if (inviter && inviter.phone !== p.phone) {
+      // The patient chose this physio by following their link, so no admin matching. If the physio already added this
+      // number by hand (a separate patient record), suggest instead of creating a second record for them.
+      const clash = await one('select 1 from patients where physio_id = $1 and phone = $2 and id <> $3', [inviter.id, p.phone, pid])
+      patient = clash
+        ? (await one("update patients set suggested_physio_id = $2, match_status = 'suggested', invited_by = $2, condition = coalesce(condition, $3) where id = $1 returning *", [pid, inviter.id, b.condition ?? null]))!
+        : (await one("update patients set physio_id = $2, suggested_physio_id = $2, match_status = 'confirmed', invited_by = $2, since = coalesce(since, $3), condition = coalesce(condition, $4) where id = $1 returning *", [pid, inviter.id, todayIST(), b.condition ?? null]))!
+    } else if (b.kind === 'pain' && !p.physio_id && p.match_status !== 'confirmed') {
       const sug = await suggestPhysio(b.cat, p.city ?? undefined)
       patient = (await one("update patients set suggested_physio_id = $2, match_status = $3, condition = coalesce(condition, $4) where id = $1 returning *", [pid, sug ?? null, sug ? 'suggested' : 'pending', b.condition ?? null]))!
     }

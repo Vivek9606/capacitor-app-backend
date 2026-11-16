@@ -50,6 +50,7 @@ export const physioPublic = (r: Row) => {
 export const patient = (r: Row) => ({
   id: r.id,
   physioId: opt(r.physio_id),
+  invitedBy: opt(r.invited_by),
   phone: r.phone,
   name: r.name,
   age: opt(r.age),
@@ -82,6 +83,7 @@ export const assessment = (r: Row) => ({
   totals: r.totals ?? {},
   kind: r.kind ?? 'pain',
   scores: opt(r.scores),
+  source: r.source ?? 'app',
   createdAt: iso(r.created_at),
 })
 

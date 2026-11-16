@@ -29,3 +29,20 @@ export async function suggestPhysio(cat: string | undefined, city: string | unde
   }
   return best?.id
 }
+
+/**
+ * The physio behind an invite link (`?physio=<ref>`). ref is the directory listing slug, the physio's own booking-page
+ * slug, or their id. Hidden listings and unknown refs resolve to nothing.
+ */
+export async function physioByRef(ref: string | undefined) {
+  const r = (ref ?? '').trim().toLowerCase()
+  if (!/^[a-z0-9_-]{2,80}$/.test(r)) return undefined
+  const rows = await q<{ id: string; name: string; phone: string; dir_slug: string | null }>(
+    `select ph.id, ph.name, ph.phone, d.slug as dir_slug
+       from physios ph left join directory_profiles d on d.physio_id = ph.id and d.status = 'live'
+      where d.slug = $1 or ph.slug = $1 or ph.id = $1
+      limit 1`,
+    [r],
+  )
+  return rows[0]
+}

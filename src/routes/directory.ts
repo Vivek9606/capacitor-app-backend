@@ -110,7 +110,7 @@ export async function directoryRoutes(app: FastifyInstance) {
     const body = z.object({ signupToken: z.string(), profile: listingInput, referredBy: z.string().max(20).optional() }).parse(req.body)
     const phone = verifySignup(body.signupToken)
     if (await one('select 1 from physios where phone = $1', [phone])) throw new HttpError(409, 'An account already exists for this number. Verify again to edit your listing.', 'exists')
-    if (await one('select 1 from patients where phone = $1', [phone])) throw new HttpError(409, 'This number is registered as a patient on Betterhood. Use your practice number to list yourself.', 'patient_number')
+    // A number that is already a consumer can also be a physio: one person, both profiles (switch in the app).
     const b = body.profile
     const { practice, practiceSettings } = practiceFrom(b.modes)
     const { physio, row } = await tx(async (c) => {
