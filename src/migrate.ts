@@ -12,7 +12,9 @@ async function main() {
   const url = process.env.DATABASE_URL
   if (!url) throw new Error('DATABASE_URL is required')
   // Tables live in the "app" schema (see 001); default to it so a migration that forgets `set search_path` still works.
-  const client = new pg.Client({ connectionString: url, ssl: { rejectUnauthorized: false }, options: '-c search_path=app' })
+  // Same TLS rule as db.ts: Supabase needs it, a local Postgres (dev/testing) has none.
+  const ssl = /@(localhost|127\.0\.0\.1)[:/]/.test(url) ? false : { rejectUnauthorized: false }
+  const client = new pg.Client({ connectionString: url, ssl, options: '-c search_path=app' })
   await client.connect()
   try {
     await client.query('create table if not exists public.betterhood_migrations (name text primary key, applied_at timestamptz not null default now())')

@@ -142,6 +142,8 @@ export const booking = (r: Row) => ({
   address: opt(r.address),
   location: opt(r.location),
   checkedInAt: iso(r.checked_in_at),
+  sponsored: r.sponsored || undefined,
+  brief: opt(r.brief),
   createdAt: iso(r.created_at),
 })
 

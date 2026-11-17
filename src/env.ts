@@ -31,6 +31,14 @@ const schema = z.object({
   LIVEKIT_URL: z.string().optional(),
   LIVEKIT_API_KEY: z.string().optional(),
   LIVEKIT_API_SECRET: z.string().optional(),
+  /** Pain chat (consumer app). Without a key the chat runs a fixed list of questions, which is enough to test the flow. */
+  ANTHROPIC_API_KEY: z.string().optional().or(z.literal('').transform(() => undefined)),
+  PAIN_CHAT_MODEL: z.string().default('claude-opus-5-5'),
+  /** Used for the pain chat when there's no Anthropic key. */
+  GEMINI_API_KEY: z.string().optional().or(z.literal('').transform(() => undefined)),
+  GEMINI_MODEL: z.string().default('gemini-3.5-flash'),
+  /** Tried when GEMINI_MODEL is overloaded or rate-limited. */
+  GEMINI_FALLBACK_MODEL: z.string().default('gemini-3.5-flash-lite'),
   /** Comma-separated phone numbers that can sign in to the admin dashboard (/admin). */
   ADMIN_PHONES: z.string().default(''),
   OTP_DEV_CODE: z
