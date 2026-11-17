@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { requireRole } from '../auth.js'
 import { one, q } from '../db.js'
 import { siteUrl } from '../directory.js'
+import * as M from '../mappers.js'
 import { newId, notFound } from '../util.js'
 
 /**
@@ -103,7 +104,7 @@ const PHYSIO_SQL = `
          i.n as invoices, i.first_at as first_invoice_at, i.last_at as last_invoice_at, i.paid as paid_total, i.unpaid as unpaid_total,
          g.n as groups, rf.n as referrals, s.active as active_patients,
          dp.status as listing_status, dp.slug as listing_slug, dp.published_at as listed_at,
-         coalesce(t.tags, '{}') as admin_tags, n.n as notes
+         coalesce(t.tags, '{}') as admin_tags, n.n as notes, w.first_at as first_web_at
   from physios ph
   left join lateral (select count(*)::int n, min(created_at) first_at, max(created_at) last_at, count(*) filter (where discharged_at is not null)::int discharged
                      from patients where physio_id = ph.id) pt on true
@@ -118,7 +119,8 @@ const PHYSIO_SQL = `
                      where x.physio_id = ph.id and sl.status = 'done' and sl.date >= (now() - interval '14 days')::date) s on true
   left join directory_profiles dp on dp.physio_id = ph.id
   left join admin_tags t on t.subject_type = 'physio' and t.subject_id = ph.id
-  left join lateral (select count(*)::int n from admin_notes where subject_type = 'physio' and subject_id = ph.id) n on true`
+  left join lateral (select count(*)::int n from admin_notes where subject_type = 'physio' and subject_id = ph.id) n on true
+  left join lateral (select min(created_at) first_at from web_submissions where phone = ph.phone) w on true`
 
 function physio(r: Row) {
   const place = [r.clinic?.address, r.clinic?.area, r.practice?.serviceArea, ...((r.practice?.locations ?? []) as Row[]).map((l) => l.address)].filter(Boolean).join(' · ')
@@ -148,6 +150,7 @@ function physio(r: Row) {
     setupDone,
     setupTotal: Object.keys(setup).length,
     wasReferred: !!r.was_referred,
+    firstWebAt: iso(r.first_web_at),
     createdAt: iso(r.created_at)!,
     lastSeenAt: iso(r.last_seen_at),
     lastActiveAt,
@@ -428,6 +431,160 @@ export async function adminJourneyRoutes(app: FastifyInstance) {
       events: events.sort((a, b) => b.at.localeCompare(a.at)).slice(0, 400),
       notes: notes.map((n) => ({ id: n.id, text: n.text, author: n.author, createdAt: iso(n.created_at)! })),
       tags: tags?.tags ?? [],
+    }
+  })
+
+  // One person's whole journey, grouped by stage, for the mind map. Message text and chat transcripts stay out
+  // (transcripts are at /admin/pain-chats/:id); everything else the stage holds is here.
+  app.get('/admin/journey/:type/:id', async (req) => {
+    requireRole(req, 'admin')
+    const { type, id } = z.object({ type: z.enum(['patient', 'physio']), id: z.string().max(40) }).parse(req.params)
+    const tagsOf = async () => (await one<{ tags: string[] }>('select tags from admin_tags where subject_type = $1 and subject_id = $2', [type, id]))?.tags ?? []
+    const notesOf = async () => (await one<{ n: number }>('select count(*)::int n from admin_notes where subject_type = $1 and subject_id = $2', [type, id]))?.n ?? 0
+    const webOf = async (phone: string) =>
+      (await q('select * from web_submissions where phone = $1 order by created_at', [phone])).map((w) => ({
+        id: w.id,
+        kind: w.kind as 'form' | 'assessment',
+        form: w.form as string,
+        page: w.page ?? undefined,
+        title: (w.data?.title as string | undefined) ?? undefined,
+        result: (w.data?.result as string | undefined) ?? undefined,
+        condition: (w.data?.condition as string | undefined) ?? undefined,
+        area: (w.data?.area as string | undefined) ?? undefined,
+        createdAt: iso(w.created_at)!,
+      }))
+
+    if (type === 'patient') {
+      const p = await one('select p.*, ph.name as physio_name, ph.slug as physio_slug from patients p left join physios ph on ph.id = p.physio_id where p.id = $1', [id])
+      if (!p) throw notFound('Consumer not found')
+      const [web, as, chats, bk, pl, sl, ms, inv, cs, tags, notes] = await Promise.all([
+        webOf(p.phone),
+        q('select * from assessments where patient_id = $1 order by created_at', [id]),
+        q(
+          `select c.id, c.status, c.engine, c.assessment, c.created_at, ph.name as physio_name,
+                  (select count(*)::int from jsonb_array_elements(c.messages) m where m->>'role' = 'user') as user_messages
+           from pain_chats c left join physios ph on ph.id = c.physio_id where c.patient_id = $1 order by c.created_at`,
+          [id],
+        ),
+        q('select b.*, ph.name as physio_name from bookings b join physios ph on ph.id = b.physio_id where b.patient_id = $1 or (b.patient_id is null and b.patient_phone = $2) order by b.date, b.time', [id, p.phone]),
+        q('select * from plans where patient_id = $1 order by sent_at nulls last', [id]),
+        q(
+          `select sl.plan_id, count(*) filter (where sl.status = 'done')::int done, count(*) filter (where sl.status = 'skipped')::int skipped,
+                  max(sl.date) last_day, round(avg(sl.pain) filter (where sl.status = 'done'), 1)::float avg_pain,
+                  (array_agg(sl.pain order by sl.date) filter (where sl.pain is not null))[1] first_pain,
+                  (array_agg(sl.pain order by sl.date desc) filter (where sl.pain is not null))[1] last_pain
+           from session_logs sl join plans x on x.id = sl.plan_id where x.patient_id = $1 group by sl.plan_id`,
+          [id],
+        ),
+        one<{ from_patient: number; from_physio: number; last_at: string | null }>(
+          "select count(*) filter (where sender = 'patient')::int from_patient, count(*) filter (where sender <> 'patient')::int from_physio, max(at) last_at from messages where patient_id = $1",
+          [id],
+        ),
+        q("select * from invoices where patient_id = $1 and status <> 'void' order by created_at", [id]),
+        q('select * from consents where patient_id = $1 order by requested_at', [id]),
+        tagsOf(),
+        notesOf(),
+      ])
+      const sessions = new Map(sl.map((s) => [s.plan_id, s]))
+      return {
+        type,
+        profile: {
+          id: p.id,
+          name: p.name,
+          phone: p.phone,
+          email: p.email ?? undefined,
+          city: p.city ?? undefined,
+          age: p.age ?? undefined,
+          sex: p.sex ?? undefined,
+          condition: p.condition ?? undefined,
+          selfSignup: !!p.self_signup,
+          createdAt: iso(p.created_at)!,
+          consentAt: iso(p.consent_at),
+          lastSeenAt: iso(p.last_seen_at),
+          physio: p.physio_id ? { id: p.physio_id, name: p.physio_name, slug: p.physio_slug, matchStatus: p.match_status ?? undefined, since: p.since ?? undefined } : undefined,
+          dischargedAt: iso(p.discharged_at),
+          discharge: p.discharge ?? undefined,
+        },
+        web,
+        assessments: as.map(M.assessment),
+        chats: chats.map((c) => ({
+          id: c.id,
+          status: c.status,
+          engine: c.engine,
+          area: c.assessment?.area ?? 'unknown',
+          stage: c.assessment?.stage ?? 'unknown',
+          severity: c.assessment?.severity ?? -1,
+          redFlags: c.assessment?.red_flags ?? [],
+          summary: c.assessment?.summary_for_physio || undefined,
+          userMessages: c.user_messages,
+          physioName: c.physio_name ?? undefined,
+          createdAt: iso(c.created_at)!,
+        })),
+        bookings: bk.map((b) => ({ ...M.booking(b), physioName: b.physio_name })),
+        plans: pl.map((x) => {
+          const s = sessions.get(x.id)
+          return {
+            id: x.id,
+            title: x.title,
+            status: x.status,
+            weeks: x.weeks,
+            daysPerWeek: x.days_per_week,
+            sentAt: iso(x.sent_at),
+            openedAt: iso(x.opened_at),
+            done: s?.done ?? 0,
+            skipped: s?.skipped ?? 0,
+            lastDay: s?.last_day ?? undefined,
+            avgPain: s?.avg_pain ?? undefined,
+            firstPain: s?.first_pain ?? undefined,
+            lastPain: s?.last_pain ?? undefined,
+          }
+        }),
+        messages: { fromPatient: ms?.from_patient ?? 0, fromPhysio: ms?.from_physio ?? 0, lastAt: iso(ms?.last_at ?? undefined) },
+        invoices: inv.map((i) => ({ number: i.number, total: Number(i.total), status: i.status, method: i.method ?? undefined, createdAt: iso(i.created_at)!, paidAt: iso(i.paid_at) })),
+        consents: cs.map((c) => ({ title: c.title, status: c.status, signedAt: iso(c.signed_at) })),
+        tags,
+        notes,
+      }
+    }
+
+    const ph = await one('select ph.*, rp.name as referrer_name from physios ph left join physios rp on rp.id = ph.referred_by where ph.id = $1', [id])
+    if (!ph) throw notFound('Physio not found')
+    const [web, dp, pts, pl, bk, inv, gr, rf, tags, notes] = await Promise.all([
+      webOf(ph.phone),
+      one('select slug, status, published_at from directory_profiles where physio_id = $1', [id]),
+      q(
+        `select p.id, p.name, p.self_signup, p.created_at, p.discharged_at, p.condition,
+                (select max(sl.date) from session_logs sl join plans x on x.id = sl.plan_id where x.patient_id = p.id and sl.status = 'done') last_session
+         from patients p where p.physio_id = $1 order by p.created_at`,
+        [id],
+      ),
+      q('select status, count(*)::int n, min(sent_at) first_at from plans where physio_id = $1 group by status', [id]),
+      q('select source, visit_type, status, sponsored, count(*)::int n, min(created_at) first_at from bookings where physio_id = $1 group by 1, 2, 3, 4', [id]),
+      q("select status, count(*)::int n, coalesce(sum(total), 0)::float total from invoices where physio_id = $1 and status <> 'void' group by status", [id]),
+      q('select title, date, time, status, capacity from group_sessions where physio_id = $1 order by date desc limit 20', [id]),
+      q('select name, status, at from referrals where referrer_id = $1 order by at', [id]),
+      tagsOf(),
+      notesOf(),
+    ])
+    return {
+      type,
+      profile: {
+        ...M.physio(ph),
+        billing: undefined,
+        createdAt: iso(ph.created_at)!,
+        lastSeenAt: iso(ph.last_seen_at),
+        referredBy: ph.referrer_name ?? undefined,
+      },
+      web,
+      listing: dp ? { slug: dp.slug, status: dp.status, url: siteUrl(dp.slug), publishedAt: iso(dp.published_at) } : undefined,
+      patients: pts.map((p) => ({ id: p.id, name: p.name, selfSignup: !!p.self_signup, condition: p.condition ?? undefined, createdAt: iso(p.created_at)!, dischargedAt: iso(p.discharged_at), lastSession: p.last_session ?? undefined })),
+      plans: pl.map((r) => ({ status: r.status, n: r.n, firstAt: iso(r.first_at) })),
+      bookings: bk.map((r) => ({ source: r.source, visitType: r.visit_type, status: r.status, sponsored: !!r.sponsored, n: r.n, firstAt: iso(r.first_at) })),
+      invoices: inv.map((r) => ({ status: r.status, n: r.n, total: r.total })),
+      groups: gr.map((g) => ({ title: g.title, date: g.date, time: String(g.time).slice(0, 5), status: g.status, capacity: g.capacity })),
+      referrals: rf.map((r) => ({ name: r.name, status: r.status, at: iso(r.at) })),
+      tags,
+      notes,
     }
   })
 
