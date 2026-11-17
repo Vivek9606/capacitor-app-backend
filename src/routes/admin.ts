@@ -32,6 +32,51 @@ export async function adminRoutes(app: FastifyInstance) {
     }
   })
 
+  // Pain chats (consumer app): who talked to the assistant, what it understood, and whether it led to a free consult.
+  // The list leaves the transcripts out; GET /admin/pain-chats/:id has the full conversation.
+  app.get('/admin/pain-chats', async (req) => {
+    requireRole(req, 'admin')
+    const rows = await q(
+      `select c.id, c.status, c.engine, c.assessment, c.created_at, c.updated_at,
+              (select count(*)::int from jsonb_array_elements(c.messages) m where m->>'role' = 'user') as user_messages,
+              (c.messages -> 1 ->> 'text') as first_message,
+              p.id as patient_id, p.name as patient_name, p.phone as patient_phone, p.city as patient_city,
+              ph.name as physio_name, b.id as booking_id, b.date as booking_date, b.time as booking_time, b.status as booking_status
+       from pain_chats c
+       join patients p on p.id = c.patient_id
+       left join physios ph on ph.id = c.physio_id
+       left join bookings b on b.id = c.booking_id
+       order by c.created_at desc limit 500`,
+    )
+    return {
+      chats: rows.map((r) => ({
+        id: r.id,
+        status: r.status,
+        engine: r.engine,
+        area: r.assessment?.area ?? 'unknown',
+        stage: r.assessment?.stage ?? 'unknown',
+        severity: r.assessment?.severity ?? 0,
+        redFlags: r.assessment?.red_flags ?? [],
+        summary: r.assessment?.summary_for_physio || undefined,
+        userMessages: r.user_messages,
+        firstMessage: r.first_message ?? undefined,
+        patient: { id: r.patient_id, name: r.patient_name, phone: r.patient_phone, city: r.patient_city ?? undefined },
+        physioName: r.physio_name ?? undefined,
+        booking: r.booking_id ? { id: r.booking_id, date: r.booking_date, time: String(r.booking_time).slice(0, 5), status: r.booking_status } : undefined,
+        createdAt: new Date(r.created_at).toISOString(),
+        updatedAt: new Date(r.updated_at).toISOString(),
+      })),
+    }
+  })
+
+  app.get('/admin/pain-chats/:id', async (req) => {
+    requireRole(req, 'admin')
+    const { id } = z.object({ id: z.string().min(1).max(64) }).parse(req.params)
+    const c = await one('select messages from pain_chats where id = $1', [id])
+    if (!c) throw notFound('Chat not found')
+    return { messages: c.messages as { role: 'user' | 'assistant'; text: string; at: string }[] }
+  })
+
   // Take a directory listing off betterhood.in (or put it back). Listings go live without review; this is the brake.
   app.post('/admin/directory/:physioId/status', async (req) => {
     requireRole(req, 'admin')
