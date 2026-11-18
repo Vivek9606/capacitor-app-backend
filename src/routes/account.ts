@@ -88,11 +88,13 @@ export async function accountRoutes(app: FastifyInstance) {
     }
     const me = await one('select * from patients where id = $1', [s.sub])
     if (!me) throw new HttpError(401, 'Account not found', 'unauthenticated')
-    const [physio, assessments, physioSide, plan] = await Promise.all([
+    const [physio, assessments, physioSide, plan, results] = await Promise.all([
       one<{ name: string }>('select name from physios where id = $1', [me.physio_id ?? me.suggested_physio_id ?? '']),
       q('select * from assessments where patient_id = $1 order by created_at desc limit 5', [s.sub]),
       one('select 1 from physios where phone = $1', [me.phone]),
       one("select 1 from plans where patient_id = $1 and status = 'active' limit 1", [s.sub]),
+      // Every result, oldest first and without answers: the website's betterYou corner shows them on any device.
+      q('select * from assessments where patient_id = $1 order by coalesce(taken_at, created_at) desc limit 120', [s.sub]),
     ])
     return {
       role: 'patient',
@@ -105,6 +107,10 @@ export async function accountRoutes(app: FastifyInstance) {
       matchStatus: me.match_status ?? null,
       activePlan: !!plan,
       assessments: assessments.map(M.assessment),
+      results: results.reverse().map((r) => {
+        const { answers: _a, patientId: _p, ...brief } = M.assessment(r)
+        return brief
+      }),
     }
   })
 }
