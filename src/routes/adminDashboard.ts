@@ -76,7 +76,7 @@ export async function adminDashboardRoutes(app: FastifyInstance) {
       q(`select id, patient_id, source, kind, area, coalesce(taken_at, created_at) as at, advisory is not null or coalesce(array_length(advisory_reasons, 1), 0) > 0 as red_flag from assessments`),
       q(`select distinct sl.date as day, x.patient_id, x.physio_id from session_logs sl join plans x on x.id = sl.plan_id where sl.status = 'done'`),
       q(`select paid_at, patient_id, physio_id, total from invoices where status = 'paid' and paid_at is not null`),
-      q(`select b.created_at, b.physio_id, coalesce(b.patient_id, (select p.id from patients p where p.phone = b.patient_phone limit 1)) as patient_id from bookings b`),
+      q(`select b.created_at, b.physio_id, b.visit_type, b.status, b.date, b.time, b.physio_joined_at, b.patient_joined_at, coalesce(b.patient_id, (select p.id from patients p where p.phone = b.patient_phone limit 1)) as patient_id from bookings b`),
       q(`${PHYSIO_SQL} order by ph.created_at`),
       q<{ phone: string }>('select phone from test_contacts'),
       q(`select subject_id, tags from admin_tags where subject_type = 'lead'`),
@@ -238,7 +238,17 @@ export async function adminDashboardRoutes(app: FastifyInstance) {
       events: {
         assessments: assessmentEvents,
         sessions: sessions.map((s) => ({ at: dayIso(s.day)!, who: s.patient_id as string, physioId: s.physio_id as string })),
-        bookings: bookings.map((b) => ({ at: iso(b.created_at)!, who: (b.patient_id as string | null) ?? null, physioId: b.physio_id as string })),
+        bookings: bookings.map((b) => ({
+          at: iso(b.created_at)!,
+          who: (b.patient_id as string | null) ?? null,
+          physioId: b.physio_id as string,
+          visitType: b.visit_type as string,
+          status: b.status as string,
+          /** Appointment start, Indian time. */
+          when: `${b.date}T${String(b.time).slice(0, 5)}:00+05:30`,
+          physioJoinedAt: iso(b.physio_joined_at),
+          patientJoinedAt: iso(b.patient_joined_at),
+        })),
         payments: payments.map((x) => ({ at: iso(x.paid_at)!, who: x.patient_id as string | null, physioId: x.physio_id as string, amount: Number(x.total) })),
         // Website submissions without a phone (nobody to attach them to), for the website total only.
         anonymous: web.filter((w) => !w.phone).map((w) => ({ at: iso(w.created_at)!, kind: w.kind as string })),

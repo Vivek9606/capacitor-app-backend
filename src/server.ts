@@ -15,7 +15,7 @@ import { webhookRoutes } from './routes/webhook.js'
 import { adminRoutes } from './routes/admin.js'
 import { adminJourneyRoutes } from './routes/adminJourneys.js'
 import { adminDashboardRoutes } from './routes/adminDashboard.js'
-import { videoRoutes } from './routes/video.js'
+import { videoEnabled, videoRoutes } from './routes/video.js'
 import { directoryRoutes } from './routes/directory.js'
 import { accountRoutes } from './routes/account.js'
 import { painChatRoutes } from './routes/painChat.js'
@@ -57,7 +57,8 @@ app.get('/', async () => ({ name: 'Betterhood API', status: 'running', health: '
 
 app.get('/health', async () => {
   await pool.query('select 1')
-  return { ok: true }
+  // video: whether LiveKit keys are set (no secrets exposed), so the apps and the team can tell why a call won't start.
+  return { ok: true, video: videoEnabled() }
 })
 
 await app.register(authRoutes)

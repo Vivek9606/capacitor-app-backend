@@ -399,7 +399,12 @@ export async function adminJourneyRoutes(app: FastifyInstance) {
             .join(' · '),
         )
       for (const c of await consentHistory('patient', id)) add(iso(c.at), 'consent', `${c.granted ? 'Agreed to' : 'Declined'} ${CONSENT_LABEL[c.purpose as string] ?? c.purpose}`, `${c.channel === 'web' ? 'Website' : 'App'} · wording ${c.version}`)
-      for (const b of bk) add(iso(b.created_at), 'booking', `${b.source === 'public_profile' ? 'Requested' : 'Booked'} a ${String(b.visit_type).replace(/_/g, ' ')} visit for ${b.date} ${b.time}`, `Now: ${String(b.status).replace(/_/g, ' ')}`)
+      for (const b of bk) {
+        const kind = b.visit_type === 'teleconsult' ? 'video consult' : `${String(b.visit_type).replace(/_/g, ' ')} visit`
+        add(iso(b.created_at), 'booking', `${b.source === 'public_profile' ? 'Requested' : 'Booked'} a ${kind} for ${b.date} ${String(b.time).slice(0, 5)}`, `Now: ${String(b.status).replace(/_/g, ' ')}`)
+        if (b.physio_joined_at) add(iso(b.physio_joined_at), 'booking', 'Physio joined the video call')
+        if (b.patient_joined_at) add(iso(b.patient_joined_at), 'booking', 'Joined the video call')
+      }
       for (const x of pl) {
         add(iso(x.sent_at), 'plan', `Care plan sent: ${x.title}`, `${x.days_per_week} days a week for ${x.weeks} weeks · ${x.status}`)
         add(iso(x.opened_at), 'plan', `Opened the plan: ${x.title}`)

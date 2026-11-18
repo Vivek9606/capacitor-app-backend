@@ -3,7 +3,7 @@ import { AccessToken } from 'livekit-server-sdk'
 import { z } from 'zod'
 import { sessionFrom } from '../auth.js'
 import { visitMinutes } from '../calendar.js'
-import { one } from '../db.js'
+import { one, q } from '../db.js'
 import { env } from '../env.js'
 import { badRequest, forbidden, HttpError, notFound } from '../util.js'
 
@@ -61,6 +61,9 @@ export async function videoRoutes(app: FastifyInstance) {
     const now = Date.now()
     if (now < opens) throw new HttpError(409, `The call opens ${OPENS_BEFORE_MIN} minutes before your appointment.`, 'too_early')
     if (now > closes) throw new HttpError(409, 'This appointment has ended.', 'ended')
+
+    // First time each side joins: shown on the admin dashboard ("held" = both joined). Never blocks the call.
+    q(`update bookings set ${s.role === 'physio' ? 'physio_joined_at' : 'patient_joined_at'} = coalesce(${s.role === 'physio' ? 'physio_joined_at' : 'patient_joined_at'}, now()) where id = $1`, [b.id]).catch(() => {})
 
     const room = `bk_${b.id}`
     const name = s.role === 'physio' ? b.physio_name : b.pt_name ?? b.patient_name

@@ -150,6 +150,8 @@ export const booking = (r: Row) => ({
   checkedInAt: iso(r.checked_in_at),
   sponsored: r.sponsored || undefined,
   brief: opt(r.brief),
+  physioJoinedAt: iso(r.physio_joined_at),
+  patientJoinedAt: iso(r.patient_joined_at),
   createdAt: iso(r.created_at),
 })
 
