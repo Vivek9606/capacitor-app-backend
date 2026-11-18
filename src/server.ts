@@ -14,6 +14,7 @@ import { publicRoutes } from './routes/public.js'
 import { webhookRoutes } from './routes/webhook.js'
 import { adminRoutes } from './routes/admin.js'
 import { adminJourneyRoutes } from './routes/adminJourneys.js'
+import { adminDashboardRoutes } from './routes/adminDashboard.js'
 import { videoRoutes } from './routes/video.js'
 import { directoryRoutes } from './routes/directory.js'
 import { accountRoutes } from './routes/account.js'
@@ -68,6 +69,7 @@ await app.register(publicRoutes)
 await app.register(webhookRoutes)
 await app.register(adminRoutes)
 await app.register(adminJourneyRoutes)
+await app.register(adminDashboardRoutes)
 await app.register(videoRoutes)
 await app.register(directoryRoutes)
 await app.register(accountRoutes)

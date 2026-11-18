@@ -104,7 +104,7 @@ function consumer(r: Row) {
 
 // ---------- physios ----------
 // No photo here: it's a data URL and would make the list huge.
-const PHYSIO_SQL = `
+export const PHYSIO_SQL = `
   select ph.id, ph.name, ph.phone, ph.email, ph.verification, ph.qualification, ph.focus_areas, ph.clinic, ph.practice, ph.availability, ph.billing,
          ph.course_progress, ph.created_at, ph.last_seen_at, ph.photo is not null as has_photo, ph.referred_by is not null as was_referred,
          pt.n as patients, pt.first_at as first_patient_at, pt.last_at as last_patient_at, pt.discharged,
@@ -131,7 +131,7 @@ const PHYSIO_SQL = `
   left join lateral (select count(*)::int n from admin_notes where subject_type = 'physio' and subject_id = ph.id) n on true
   left join lateral (select min(created_at) first_at from web_submissions where phone = ph.phone) w on true`
 
-function physio(r: Row) {
+export function physio(r: Row) {
   const place = [r.clinic?.address, r.clinic?.area, r.practice?.serviceArea, ...((r.practice?.locations ?? []) as Row[]).map((l) => l.address)].filter(Boolean).join(' · ')
   // What a physio needs before patients can find and book them.
   const setup = {
