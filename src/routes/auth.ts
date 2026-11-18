@@ -6,6 +6,7 @@ import { one, q, tx } from '../db.js'
 import { adminPhones, env } from '../env.js'
 import { practice } from '../schemas.js'
 import { sendWhatsApp } from '../whatsapp.js'
+import { consentItems, recordConsents } from '../consents.js'
 import * as M from '../mappers.js'
 import { badRequest, HttpError, linkToken, newId, normalizePhone, otpCode, safeEqual, sha256, todayIST } from '../util.js'
 
@@ -86,6 +87,8 @@ export async function authRoutes(app: FastifyInstance) {
         practiceSettings: z.array(z.string().max(40)).max(8),
         practice: practice.optional(),
         referredBy: z.string().max(20).optional(),
+        consents: consentItems.optional(),
+        channel: z.enum(['web', 'app']).default('app'),
       })
       .parse(req.body)
     const phone = verifySignup(body.signupToken)
@@ -94,6 +97,7 @@ export async function authRoutes(app: FastifyInstance) {
     const physio = await tx((c) =>
       createPhysio(c, { phone, name: body.name, email: body.email, focusAreas: body.focusAreas, practiceSettings: body.practiceSettings, practice: body.practice, referredBy: body.referredBy }),
     )
+    if (body.consents?.length) await recordConsents('physio', physio.id, body.consents, body.channel)
     return { token: signSession({ sub: physio.id, role: 'physio' }), role: 'physio', userId: physio.id }
   })
 
@@ -107,16 +111,21 @@ export async function authRoutes(app: FastifyInstance) {
         sex: z.enum(['F', 'M', 'O']).optional(),
         city: z.string().trim().max(80).optional(),
         email: z.string().trim().email().max(120).optional().or(z.literal('')),
+        // What they agreed to on the sign-up form. Without it (older app builds) the account starts without consent
+        // and the app asks on the consent screen.
+        consents: consentItems.optional(),
+        channel: z.enum(['web', 'app']).default('app'),
       })
       .parse(req.body)
     const phone = verifySignup(body.signupToken)
     const existing = await accountFor(phone)
     if (existing) return { token: signSession({ sub: existing.id, role: existing.role }), role: existing.role, userId: existing.id }
-    const row = await one(
-      `insert into patients (id, physio_id, phone, name, age, sex, city, email, since, link_token, consent_at, self_signup, match_status)
-       values ($1, null, $2, $3, $4, $5, $6, $7, $8, $9, now(), true, 'pending') returning *`,
+    let row = await one(
+      `insert into patients (id, physio_id, phone, name, age, sex, city, email, since, link_token, self_signup, match_status)
+       values ($1, null, $2, $3, $4, $5, $6, $7, $8, $9, true, 'pending') returning *`,
       [newId('pt'), phone, body.name, body.age ?? null, body.sex ?? null, body.city || null, body.email || null, todayIST(), linkToken()],
     )
+    if (body.consents?.length) row = await recordConsents('patient', row!.id, body.consents, body.channel)
     return { token: signSession({ sub: row!.id, role: 'patient' }), role: 'patient', userId: row!.id, patient: M.patient(row!) }
   })
 
@@ -139,8 +148,9 @@ export async function authRoutes(app: FastifyInstance) {
     let pt = await one('select id from patients where phone = $1 order by created_at desc limit 1', [cur.phone])
     if (!pt)
       pt = await one(
-        `insert into patients (id, physio_id, phone, name, since, link_token, consent_at, self_signup, match_status)
-         values ($1, null, $2, $3, $4, $5, now(), true, 'pending') returning id`,
+        // No consent yet: the app's consent screen asks before anything is shared.
+        `insert into patients (id, physio_id, phone, name, since, link_token, self_signup, match_status)
+         values ($1, null, $2, $3, $4, $5, true, 'pending') returning id`,
         [newId('pt'), cur.phone, cur.name.replace(/^Dr\.?\s*/i, ''), todayIST(), linkToken()],
       )
     return { token: signSession({ sub: pt!.id, role: 'patient' }), role: 'patient', userId: pt!.id }

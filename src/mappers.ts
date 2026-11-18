@@ -68,6 +68,7 @@ export const patient = (r: Row) => ({
   match: r.match_status ? { status: r.match_status, suggestedPhysioId: opt(r.suggested_physio_id) } : undefined,
   dischargedAt: iso(r.discharged_at),
   discharge: r.discharge ?? undefined,
+  whatsappOptIn: r.whatsapp_opt_in ?? undefined,
 })
 
 export const assessment = (r: Row) => ({
@@ -84,6 +85,11 @@ export const assessment = (r: Row) => ({
   kind: r.kind ?? 'pain',
   scores: opt(r.scores),
   source: r.source ?? 'app',
+  answers: opt(r.answers),
+  painScore: opt(r.pain_score),
+  advisoryReasons: r.advisory_reasons?.length ? r.advisory_reasons : undefined,
+  takenAt: iso(r.taken_at),
+  formVersion: opt(r.form_version),
   createdAt: iso(r.created_at),
 })
 

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { requireRole } from '../auth.js'
 import { one, q } from '../db.js'
+import { consentHistory } from '../consents.js'
 import { siteUrl } from '../directory.js'
 import * as M from '../mappers.js'
 import { newId, notFound } from '../util.js'
@@ -24,6 +25,8 @@ const health = (lastActiveAt?: string) => {
   return d === undefined ? 'inactive' : d <= 7 ? 'active' : d <= 21 ? 'slipping' : 'inactive'
 }
 
+const CONSENT_LABEL: Record<string, string> = { terms: 'the terms and privacy policy', share_with_physio: 'sharing their answers with the physio', whatsapp_updates: 'WhatsApp updates' }
+
 const subjectType = z.enum(['patient', 'physio', 'lead'])
 const SUBJECT_TABLE = { patient: 'patients', physio: 'physios', lead: 'web_submissions' } as const
 
@@ -37,7 +40,8 @@ const CONSUMER_SQL = `
          pl.n as plans, pl.first_at as first_plan_at, pl.opened_at as plan_opened_at,
          s.done as sessions_done, s.skipped as sessions_skipped, s.first_date as first_session_date, s.last_date as last_session_date,
          m.last_at as last_message_at, i.paid as paid_total,
-         w.n as web_submissions, w.first_at as first_web_at,
+         w.n as web_submissions, w.first_at as first_web_at, wu.n as web_unverified,
+         p.whatsapp_opt_in,
          coalesce(t.tags, '{}') as admin_tags, n.n as notes
   from patients p
   left join physios ph on ph.id = p.physio_id
@@ -50,7 +54,10 @@ const CONSUMER_SQL = `
                      from session_logs sl join plans x on x.id = sl.plan_id where x.patient_id = p.id) s on true
   left join lateral (select max(at) last_at from messages where patient_id = p.id and sender = 'patient') m on true
   left join lateral (select coalesce(sum(total), 0)::int paid from invoices where patient_id = p.id and status = 'paid') i on true
-  left join lateral (select count(*)::int n, min(created_at) first_at from web_submissions where phone = p.phone) w on true
+  -- Website activity that is verifiably theirs (saved signed in, or claimed after verifying the number), and what was
+  -- only typed with the same phone (not proof it was them).
+  left join lateral (select count(*)::int n, min(created_at) first_at from web_submissions where claimed_by = p.id) w on true
+  left join lateral (select count(*)::int n from web_submissions where claimed_by is null and not disowned and phone = p.phone) wu on true
   left join admin_tags t on t.subject_type = 'patient' and t.subject_id = p.id
   left join lateral (select count(*)::int n from admin_notes where subject_type = 'patient' and subject_id = p.id) n on true`
 
@@ -75,6 +82,8 @@ function consumer(r: Row) {
     lastActiveAt,
     firstWebAt: iso(r.first_web_at),
     webSubmissions: r.web_submissions as number,
+    webUnverified: r.web_unverified as number,
+    whatsappOptIn: r.whatsapp_opt_in ?? undefined,
     assessments: r.assessments as number,
     firstAssessmentAt: iso(r.first_assessment_at),
     bookings: r.bookings as number,
@@ -179,7 +188,8 @@ function physio(r: Row) {
 
 // ---------- website ----------
 const WEB_SQL = `
-  select w.*, (select id from patients where phone = w.phone order by created_at limit 1) as patient_id,
+  select w.*, w.claimed_by as patient_id,
+         (select id from patients where w.claimed_by is null and phone = w.phone order by created_at limit 1) as phone_match_patient_id,
          (select id from physios where phone = w.phone) as physio_id,
          coalesce(t.tags, '{}') as admin_tags,
          (select count(*)::int from admin_notes where subject_type = 'lead' and subject_id = w.id) as notes
@@ -196,8 +206,12 @@ const webSubmission = (r: Row) => ({
   email: r.email ?? undefined,
   data: r.data ?? {},
   createdAt: iso(r.created_at)!,
-  // Set when the same phone number later (or earlier) made an app account.
+  // The account it belongs to: saved there signed in, or claimed by the verified owner of the number.
   patientId: r.patient_id ?? undefined,
+  // Not claimed, but an account has the phone that was typed: possibly them, not verified.
+  phoneMatchPatientId: r.phone_match_patient_id ?? undefined,
+  resultId: r.result_id ?? undefined,
+  disowned: r.disowned || undefined,
   physioId: r.physio_id ?? undefined,
   tags: r.admin_tags as string[],
   notes: r.notes as number,
@@ -281,7 +295,15 @@ export async function adminJourneyRoutes(app: FastifyInstance) {
       one<{ total: number; forms: number; assessments: number; with_phone: number; converted: number }>(
         `select count(*)::int total, count(*) filter (where kind = 'form')::int forms, count(*) filter (where kind = 'assessment')::int assessments,
                 count(distinct phone)::int with_phone,
-                (select count(distinct w.phone)::int from web_submissions w where exists (select 1 from patients p where p.phone = w.phone) or exists (select 1 from physios ph where ph.phone = w.phone)) converted
+                -- People whose website visit led to an account: an assessment they claimed or saved signed in, or a form
+                -- sent before an account with that number was created.
+                (select count(*)::int from (
+                   select claimed_by::text as who from web_submissions where claimed_by is not null
+                   union
+                   select w.phone from web_submissions w where w.kind = 'form' and w.phone is not null and (
+                     exists (select 1 from patients p where p.phone = w.phone and p.created_at > w.created_at)
+                     or exists (select 1 from physios ph where ph.phone = w.phone and ph.created_at > w.created_at))
+                 ) x) converted
          from web_submissions`,
       ),
       // Monday-start weeks in India time, oldest first.
@@ -355,7 +377,7 @@ export async function adminJourneyRoutes(app: FastifyInstance) {
       if (!p) throw notFound('Consumer not found')
       phone = p.phone
       add(iso(p.created_at), 'account', p.self_signup ? 'Signed up in the app' : `Added by ${p.physio_name ?? 'their physio'}`, p.city)
-      add(iso(p.consent_at), 'account', 'Agreed to the terms')
+      add(iso(p.consent_at), 'account', 'Consent on file (terms and sharing with the physio)')
       add(iso(p.discharged_at), 'discharge', 'Discharged', [p.discharge?.outcome?.replace(/_/g, ' '), p.discharge?.note].filter(Boolean).join(' · '))
       const [as, bk, pl, sl, ms, inv, cs] = await Promise.all([
         q('select * from assessments where patient_id = $1', [id]),
@@ -367,7 +389,16 @@ export async function adminJourneyRoutes(app: FastifyInstance) {
         q("select * from invoices where patient_id = $1 and status <> 'void'", [id]),
         q('select * from consents where patient_id = $1', [id]),
       ])
-      for (const a of as) add(iso(a.created_at), 'assessment', `Took ${a.title}`, a.condition ?? (a.scores?.overall != null ? `Overall ${a.scores.overall}/10` : undefined))
+      for (const a of as)
+        add(
+          iso(a.taken_at ?? a.created_at),
+          'assessment',
+          `${a.advisory_reasons?.length ? '⚠ ' : ''}Took ${a.title}${a.source === 'web' ? ' on the website' : ''}`,
+          [a.condition ?? (a.scores?.overall != null ? `Overall ${a.scores.overall}/10` : undefined), a.pain_score != null ? `Pain ${a.pain_score}/10` : undefined, a.advisory_reasons?.length ? `Advisory: ${a.advisory_reasons.join('; ')}` : undefined]
+            .filter(Boolean)
+            .join(' · '),
+        )
+      for (const c of await consentHistory('patient', id)) add(iso(c.at), 'consent', `${c.granted ? 'Agreed to' : 'Declined'} ${CONSENT_LABEL[c.purpose as string] ?? c.purpose}`, `${c.channel === 'web' ? 'Website' : 'App'} · wording ${c.version}`)
       for (const b of bk) add(iso(b.created_at), 'booking', `${b.source === 'public_profile' ? 'Requested' : 'Booked'} a ${String(b.visit_type).replace(/_/g, ' ')} visit for ${b.date} ${b.time}`, `Now: ${String(b.status).replace(/_/g, ' ')}`)
       for (const x of pl) {
         add(iso(x.sent_at), 'plan', `Care plan sent: ${x.title}`, `${x.days_per_week} days a week for ${x.weeks} weeks · ${x.status}`)
@@ -417,10 +448,16 @@ export async function adminJourneyRoutes(app: FastifyInstance) {
       if (!phone) add(iso(w.created_at), 'web', w.kind === 'assessment' ? `Took ${w.data?.title ?? w.form} on the website` : `Sent the "${w.form}" form on the website`, w.page)
     }
 
-    // What the same phone number did on the website.
+    // What they did on the website: verified (claimed or saved signed in), or only typed with the same phone.
     if (phone) {
-      for (const w of await q('select * from web_submissions where phone = $1', [phone]))
-        add(iso(w.created_at), 'web', w.kind === 'assessment' ? `Took ${w.data?.title ?? w.form} on the website` : `Sent the "${w.form}" form on the website`, w.kind === 'assessment' ? w.data?.condition ?? w.page : w.page)
+      const own = type === 'patient' ? id : null
+      for (const w of await q('select * from web_submissions where claimed_by = $2 or (claimed_by is null and not disowned and phone = $1)', [phone, own])) {
+        const mine = !!own && w.claimed_by === own
+        // A claimed assessment is already on the timeline as the assessment itself.
+        if (mine && w.kind === 'assessment') continue
+        const what = w.kind === 'assessment' ? `Took ${w.data?.title ?? w.form} on the website` : `Sent the "${w.form}" form on the website`
+        add(iso(w.created_at), 'web', type === 'lead' || mine ? what : `${what} (same phone typed, not verified)`, w.kind === 'assessment' ? w.data?.condition ?? w.page : w.page)
+      }
     }
 
     const [notes, tags] = await Promise.all([
@@ -441,8 +478,8 @@ export async function adminJourneyRoutes(app: FastifyInstance) {
     const { type, id } = z.object({ type: z.enum(['patient', 'physio']), id: z.string().max(40) }).parse(req.params)
     const tagsOf = async () => (await one<{ tags: string[] }>('select tags from admin_tags where subject_type = $1 and subject_id = $2', [type, id]))?.tags ?? []
     const notesOf = async () => (await one<{ n: number }>('select count(*)::int n from admin_notes where subject_type = $1 and subject_id = $2', [type, id]))?.n ?? 0
-    const webOf = async (phone: string) =>
-      (await q('select * from web_submissions where phone = $1 order by created_at', [phone])).map((w) => ({
+    const webOf = async (phone: string, owner?: string) =>
+      (await q('select * from web_submissions where claimed_by = $2 or (claimed_by is null and not disowned and phone = $1) order by created_at', [phone, owner ?? null])).map((w) => ({
         id: w.id,
         kind: w.kind as 'form' | 'assessment',
         form: w.form as string,
@@ -451,6 +488,7 @@ export async function adminJourneyRoutes(app: FastifyInstance) {
         result: (w.data?.result as string | undefined) ?? undefined,
         condition: (w.data?.condition as string | undefined) ?? undefined,
         area: (w.data?.area as string | undefined) ?? undefined,
+        verified: !!owner && w.claimed_by === owner,
         createdAt: iso(w.created_at)!,
       }))
 
@@ -458,7 +496,7 @@ export async function adminJourneyRoutes(app: FastifyInstance) {
       const p = await one('select p.*, ph.name as physio_name, ph.slug as physio_slug from patients p left join physios ph on ph.id = p.physio_id where p.id = $1', [id])
       if (!p) throw notFound('Consumer not found')
       const [web, as, chats, bk, pl, sl, ms, inv, cs, tags, notes] = await Promise.all([
-        webOf(p.phone),
+        webOf(p.phone, p.id),
         q('select * from assessments where patient_id = $1 order by created_at', [id]),
         q(
           `select c.id, c.status, c.engine, c.assessment, c.created_at, ph.name as physio_name,
@@ -500,6 +538,8 @@ export async function adminJourneyRoutes(app: FastifyInstance) {
           selfSignup: !!p.self_signup,
           createdAt: iso(p.created_at)!,
           consentAt: iso(p.consent_at),
+          whatsappOptIn: p.whatsapp_opt_in ?? undefined,
+          consents: (await consentHistory('patient', p.id)).map((c) => ({ purpose: c.purpose, granted: c.granted, version: c.version, wording: c.wording, channel: c.channel, at: iso(c.at)! })),
           lastSeenAt: iso(p.last_seen_at),
           physio: p.physio_id ? { id: p.physio_id, name: p.physio_name, slug: p.physio_slug, matchStatus: p.match_status ?? undefined, since: p.since ?? undefined } : undefined,
           dischargedAt: iso(p.discharged_at),

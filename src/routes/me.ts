@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify'
+import { z } from 'zod'
 import { sessionFrom } from '../auth.js'
+import { consentItems, recordConsents } from '../consents.js'
 import { one, q } from '../db.js'
 import * as M from '../mappers.js'
 import { HttpError } from '../util.js'
@@ -15,6 +17,15 @@ function seen(table: 'physios' | 'patients', id: string) {
 }
 
 export async function meRoutes(app: FastifyInstance) {
+  // Record consents for the signed-in physio or patient (e.g. the WhatsApp updates choice made at sign-in).
+  app.post('/me/consents', async (req) => {
+    const s = sessionFrom(req)
+    if (s.role === 'admin') throw new HttpError(403, 'Not allowed for this account', 'forbidden')
+    const b = z.object({ consents: consentItems.min(1), channel: z.enum(['web', 'app']).default('app') }).parse(req.body)
+    const row = await recordConsents(s.role, s.sub, b.consents, b.channel)
+    return s.role === 'patient' ? M.patient(row) : { whatsappOptIn: row.whatsapp_opt_in ?? undefined }
+  })
+
   app.get('/me/bootstrap', async (req) => {
     const s = sessionFrom(req)
     const exercises = (await q('select * from exercises where active order by region, name')).map(M.exercise)

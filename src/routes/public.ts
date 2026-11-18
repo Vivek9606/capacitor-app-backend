@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { assertSlotFree, availabilityOf, publicCalendar } from '../calendar.js'
 import { one, q, tx } from '../db.js'
 import * as M from '../mappers.js'
-import { hhmm, isoDate, visitType } from '../schemas.js'
+import { hhmm, id, isoDate, visitType } from '../schemas.js'
 import { addDays, badRequest, HttpError, newId, normalizePhone, notFound, todayIST } from '../util.js'
 import { joinGroup } from './practice.js'
 
@@ -86,14 +86,25 @@ export async function publicRoutes(app: FastifyInstance) {
         phone: z.string().max(30).optional(),
         email: z.string().trim().max(160).optional(),
         data: z.record(z.string(), z.unknown()).default({}),
+        // An assessment result's own id: the same id it gets in the account and the app.
+        resultId: id.optional(),
         website: z.string().max(0).optional(), // honeypot
       })
       .parse(req.body)
     const data = JSON.stringify(b.data)
-    if (data.length > 20_000) throw badRequest('That submission is too large')
-    await q('insert into web_submissions (id, kind, form, page, name, phone, email, data) values ($1,$2,$3,$4,$5,$6,$7,$8)', [
-      newId('ws'), b.kind, b.form, b.page ?? null, b.name || null, (b.phone && normalizePhone(b.phone)) ?? null, b.email || null, data,
+    if (data.length > 40_000) throw badRequest('That submission is too large')
+    const wid = newId('ws')
+    await q('insert into web_submissions (id, kind, form, page, name, phone, email, data, result_id) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)', [
+      wid, b.kind, b.form, b.page ?? null, b.name || null, (b.phone && normalizePhone(b.phone)) ?? null, b.email || null, data, b.kind === 'assessment' ? b.resultId ?? null : null,
     ])
+    // Signed in on the website, the result is saved to the account at the same moment. Whichever arrives second links
+    // the two (see linkSubmission in assessments.ts); only a result saved in the last hour can be linked this way.
+    if (b.kind === 'assessment' && b.resultId)
+      await q(
+        `update web_submissions w set claimed_by = a.patient_id, claimed_at = now() from assessments a
+          where w.id = $1 and a.id = $2 and a.created_at > now() - interval '1 hour'`,
+        [wid, b.resultId],
+      )
     return { ok: true }
   })
 }
