@@ -16,6 +16,7 @@ import {
   type SendResult,
   sendEmails,
 } from '../email.js'
+import { CTA_JPG_BASE64, HERO_JPG_BASE64, LOGO_CREAM_PNG_BASE64, MARK_PNG_BASE64 } from '../emailArt.js'
 import { LOGO_PNG_BASE64 } from '../emailLogo.js'
 import { env } from '../env.js'
 import { badRequest, linkToken, newId, notFound, safeEqual } from '../util.js'
@@ -40,6 +41,10 @@ const block = z.discriminatedUnion('type', [
   z.object({ type: z.literal('text'), heading: shortText(160).optional(), body: shortText(6000) }),
   z.object({ type: z.literal('article'), label: shortText(40).optional(), title: shortText(200), summary: shortText(800).optional(), url, image: url.optional().or(z.literal('')), cta: shortText(40).optional() }),
   z.object({ type: z.literal('tip'), heading: shortText(80).optional(), body: shortText(2000) }),
+  z.object({ type: z.literal('quote'), text: shortText(600), by: shortText(80).optional() }),
+  z.object({ type: z.literal('steps'), heading: shortText(160).optional(), items: shortText(3000) }),
+  z.object({ type: z.literal('image'), src: url, alt: shortText(200).optional(), caption: shortText(200).optional(), url: url.optional().or(z.literal('')) }),
+  z.object({ type: z.literal('cta'), heading: shortText(120), body: shortText(1000).optional(), text: shortText(60), url }),
   z.object({ type: z.literal('button'), text: shortText(60), url }),
   z.object({ type: z.literal('divider') }),
 ])
@@ -65,9 +70,9 @@ function welcomeDefault(): { subject: string; preheader: string; content: EmailC
       intro:
         'Hi {{first_name}}, thanks for confirming.\n\nEvery couple of weeks we’ll send you one short letter from our physios: what helps with everyday aches, how to move better at work and at home, and the research worth knowing about.\n\nNo spam, and you can unsubscribe with one click at the bottom of any email.',
       blocks: [
+        { type: 'steps', heading: 'What you’ll get', items: 'One short letter every couple of weeks, written by our physios\nSimple fixes for everyday aches: back, neck, knees and shoulders\nThe research worth knowing about, minus the jargon' },
         { type: 'tip', heading: 'Start here', body: 'If you sit for work, set a reminder to stand up and move for a minute **every 30 minutes**. Small, regular breaks do more for a stiff back and neck than one long stretch at the end of the day.' },
-        { type: 'text', heading: 'Not sure where your pain is coming from?', body: 'Our free pain assessment takes about 3 minutes. You’ll get a clear picture of what might be going on and what to do next, with a physio if you need one.' },
-        { type: 'button', text: 'Take the free assessment', url: `${site()}/quiz-landing-page/` },
+        { type: 'cta', heading: 'Not sure where your pain is coming from?', body: 'Our free pain assessment takes about 3 minutes. You’ll get a clear picture of what might be going on and what to do next.', text: 'Take the free assessment', url: `${site()}/quiz-landing-page/` },
       ],
       signoff: 'Move well,\nThe betterhood physio team',
     },
@@ -84,8 +89,11 @@ export function starterIssue(): { subject: string; preheader: string; content: E
       intro: 'Hi {{first_name}},\n\nA short note on what we’ve been talking about with patients, and the reads worth your time.',
       blocks: [
         { type: 'article', label: 'Read', title: 'Article title goes here', summary: 'One or two lines on why it’s worth reading.', url: `${site()}/learn/`, image: '', cta: 'Read the article' },
+        { type: 'article', label: 'Guide', title: 'A second article', summary: 'With two or more articles, an “In this letter” list appears at the top.', url: `${site()}/learn/`, image: '', cta: 'Read the guide' },
         { type: 'tip', heading: 'Physio tip', body: 'One practical thing readers can do today.' },
-        { type: 'button', text: 'Take the free pain assessment', url: `${site()}/quiz-landing-page/` },
+        { type: 'steps', heading: 'A 2-minute desk reset', items: 'Stand up and roll your shoulders back five times\nTuck your chin gently and hold for five seconds\nReach both arms overhead and take three slow breaths' },
+        { type: 'quote', text: 'Motion is lotion. The best posture is your next one.', by: 'The betterhood physio team' },
+        { type: 'cta', heading: 'Still sore after a week?', body: 'Take our free 3-minute pain assessment and see what might be going on.', text: 'Take the free pain assessment', url: `${site()}/quiz-landing-page/` },
       ],
       signoff: 'Move well,\nThe betterhood physio team',
     },
@@ -94,6 +102,13 @@ export function starterIssue(): { subject: string; preheader: string; content: E
 
 async function welcomeRow(): Promise<Row> {
   const w = await one(`select * from newsletter_issues where kind = 'welcome'`)
+  if (w && +new Date(w.updated_at) === +new Date(w.created_at)) {
+    // Never edited in admin: keep it in step with the current default.
+    const d = welcomeDefault()
+    if (JSON.stringify(w.content) !== JSON.stringify(d.content) || w.subject !== d.subject || w.preheader !== d.preheader) {
+      return (await one(`update newsletter_issues set subject = $2, preheader = $3, content = $4 where id = $1 returning *`, [w.id, d.subject, d.preheader, d.content]))!
+    }
+  }
   if (w) return w
   const d = welcomeDefault()
   await q(`insert into newsletter_issues (id, kind, subject, preheader, content) values ($1, 'welcome', $2, $3, $4) on conflict do nothing`, [newId('nl'), d.subject, d.preheader, d.content])
@@ -109,8 +124,19 @@ const links = (base: string, s: Row) => ({
   unsubUrl: `${base}/public/newsletter/unsubscribe?t=${s.unsub_token}`,
 })
 
-function render(row: { subject: string; preheader: string; content: EmailContent }, base: string, footer: 'newsletter' | 'confirm') {
-  return { subject: row.subject, ...renderEmail(row.content, { subject: row.subject, preheader: row.preheader, logoUrl: `${base}/email/logo.png`, siteUrl: site(), footer }) }
+function render(row: { subject: string; preheader: string; content: EmailContent }, base: string, footer: 'newsletter' | 'confirm', meta?: string) {
+  return { subject: row.subject, ...renderEmail(row.content, { subject: row.subject, preheader: row.preheader, assetBase: base, siteUrl: site(), footer, meta }) }
+}
+
+/** Masthead label for an issue: "No. 3 · November 2026" (numbered by send order; a draft gets the next number). */
+async function issueMeta(row?: Row | null): Promise<string | undefined> {
+  if (row?.kind === 'welcome') return undefined
+  const at = row?.sent_at ? new Date(row.sent_at) : new Date()
+  const r = await one<{ n: number }>(
+    `select count(*)::int as n from newsletter_issues where kind = 'issue' and status = 'sent' and sent_at is not null and sent_at < $1 and id <> $2`,
+    [at, row?.id ?? ''],
+  )
+  return `No. ${(r?.n ?? 0) + 1} · ${at.toLocaleDateString('en-IN', { month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' })}`
 }
 
 async function record(kind: 'confirm' | 'welcome' | 'issue' | 'test', issueId: string | null, subscriberId: string | null, to: string, r: SendResult) {
@@ -133,7 +159,7 @@ async function sendConfirm(s: Row, base: string) {
 
 async function sendWelcome(s: Row, base: string) {
   const w = await welcomeRow()
-  const c = render(w as any, base, 'newsletter')
+  const c = render(w as any, base, 'newsletter', await issueMeta(w))
   const l = links(base, s)
   const [r] = await sendEmails([{ to: s.email, subject: c.subject, html: personalise(c.html, { firstName: s.name, ...l }, true), text: personalise(c.text, { firstName: s.name, ...l }, false), unsubUrl: l.unsubUrl, tags: { kind: 'welcome' } }])
   await record('welcome', w.id, s.id, s.email, r)
@@ -146,7 +172,7 @@ async function sendWelcome(s: Row, base: string) {
 async function sendIssue(issueId: string, base: string) {
   const issue = await one('select * from newsletter_issues where id = $1', [issueId])
   if (!issue) return
-  const c = render(issue as any, base, 'newsletter')
+  const c = render(issue as any, base, 'newsletter', await issueMeta(issue))
   for (;;) {
     const subs = await q(
       `select * from newsletter_subscribers s where status = 'subscribed'
@@ -278,6 +304,12 @@ export async function newsletterRoutes(app: FastifyInstance) {
   // The logo the emails and pages show (inline PNG; email clients don't show SVG).
   const logo = Buffer.from(LOGO_PNG_BASE64, 'base64')
   app.get('/email/logo.png', async (_req, reply) => reply.type('image/png').header('Cache-Control', 'public, max-age=604800').send(logo))
+  // Template artwork (cached for a long time; regenerate under a new name if it changes).
+  const art = { 'hero.jpg': ['image/jpeg', HERO_JPG_BASE64], 'cta.jpg': ['image/jpeg', CTA_JPG_BASE64], 'logo-cream.png': ['image/png', LOGO_CREAM_PNG_BASE64], 'mark.png': ['image/png', MARK_PNG_BASE64] } as const
+  for (const [file, [type, b64]] of Object.entries(art)) {
+    const buf = Buffer.from(b64, 'base64')
+    app.get(`/email/${file}`, async (_req, reply) => reply.type(type).header('Cache-Control', 'public, max-age=2592000').send(buf))
+  }
 
   // ----- public -----
   app.post('/public/newsletter/subscribe', { config: { rateLimit: { max: 8, timeWindow: '1 hour' } } }, async (req) => {
@@ -436,12 +468,13 @@ export async function newsletterRoutes(app: FastifyInstance) {
   /** Renders unsaved editor content (or the confirmation email) for the live preview. */
   app.post('/admin/newsletter/preview', async (req) => {
     requireRole(req, 'admin')
-    const b = z.object({ kind: z.enum(['issue', 'welcome', 'confirm']).default('issue'), subject: shortText(200).default(''), preheader: shortText(200).default(''), content: content.optional() }).parse(req.body ?? {})
+    const b = z.object({ kind: z.enum(['issue', 'welcome', 'confirm']).default('issue'), id: z.string().max(40).optional(), subject: shortText(200).default(''), preheader: shortText(200).default(''), content: content.optional() }).parse(req.body ?? {})
     const base = apiBase(req)
+    const meta = b.kind === 'confirm' ? undefined : await issueMeta(b.kind === 'welcome' ? { kind: 'welcome' } : b.id ? await one('select id, kind, sent_at from newsletter_issues where id = $1', [b.id]) : null)
     const c =
       b.kind === 'confirm'
         ? render({ subject: CONFIRM_SUBJECT, preheader: '', content: confirmContent() }, base, 'confirm')
-        : render({ subject: b.subject, preheader: b.preheader, content: b.content ?? { headline: '', blocks: [] } }, base, 'newsletter')
+        : render({ subject: b.subject, preheader: b.preheader, content: b.content ?? { headline: '', blocks: [] } }, base, 'newsletter', meta)
     const v = { unsubUrl: `${base}/public/newsletter/unsubscribe?t=test`, confirmUrl: '#' }
     return { subject: c.subject, html: personalise(c.html, v, true), text: personalise(c.text, v, false) }
   })
@@ -460,7 +493,7 @@ export async function newsletterRoutes(app: FastifyInstance) {
       const r = b.kind === 'welcome' ? await welcomeRow() : await one('select * from newsletter_issues where id = $1', [b.id])
       if (!r) throw notFound('Issue not found')
       issueId = r.id
-      c = render(r as any, base, 'newsletter')
+      c = render(r as any, base, 'newsletter', await issueMeta(r))
     }
     const v = { firstName: undefined, unsubUrl: `${base}/public/newsletter/unsubscribe?t=test`, confirmUrl: `${base}/public/newsletter/confirm?t=test` }
     const results = await sendEmails(to.map((t) => ({ to: t, subject: `[Test] ${c.subject}`, html: personalise(c.html, v, true), text: personalise(c.text, v, false), tags: { kind: 'test' } })))
