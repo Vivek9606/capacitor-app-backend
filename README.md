@@ -96,6 +96,23 @@ Bookings with visit type `teleconsult` become 1:1 video calls between the physio
 - Local testing: run `livekit-server --dev`, then use `ws://localhost:7880` with key `devkey` and secret `secret`.
 - Nothing is recorded.
 
+## Email newsletter (Resend)
+
+Admin → Newsletter writes and sends "the betterhood letter". Sign-up is double opt-in: the website form (or admin)
+creates a *pending* subscriber and sends a confirmation email; clicking it subscribes them and sends the welcome
+email. Every email has a one-click unsubscribe. Code: `src/email.ts` (template + Resend), `src/routes/newsletter.ts`,
+migration 013.
+
+- `RESEND_API_KEY`: without it emails are only recorded (status "skipped").
+- `EMAIL_FROM`: defaults to `betterhood <onboarding@resend.dev>`, Resend's test sender, which only delivers to the
+  Resend account's own address. After verifying betterhood.in in Resend (DNS records), set e.g.
+  `betterhood <letter@betterhood.in>`. `EMAIL_REPLY_TO` is optional.
+- `EMAIL_ALLOWLIST`: comma-separated addresses or `@domain`; when set, nobody else gets email. Clear it to go live.
+- `EMAIL_TEST_TO`: default address for "Send test".
+- `RESEND_WEBHOOK_SECRET`: add a webhook in Resend pointing at `<api>/webhooks/resend` (events: delivered,
+  delivery delayed, bounced, complained) and paste its signing secret. Hard bounces and spam complaints stop sending.
+- `PUBLIC_API_URL`: this API's public URL for confirm/unsubscribe links (defaults to the request's own URL).
+
 ## WhatsApp via KwikEngage (current)
 
 The business number is connected through KwikEngage (GoKwik), so don't register it again on Meta's developer dashboard.

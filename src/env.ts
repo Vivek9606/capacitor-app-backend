@@ -39,6 +39,19 @@ const schema = z.object({
   GEMINI_MODEL: z.string().default('gemini-3.5-flash'),
   /** Tried when GEMINI_MODEL is overloaded or rate-limited. */
   GEMINI_FALLBACK_MODEL: z.string().default('gemini-3.5-flash-lite'),
+  /** Email (newsletter) through Resend. Without a key, emails are only logged. */
+  RESEND_API_KEY: z.string().optional().or(z.literal('').transform(() => undefined)),
+  /** Sender. Until betterhood.in is verified in Resend, only onboarding@resend.dev works, and only to the Resend account's own address. */
+  EMAIL_FROM: z.string().default('betterhood <onboarding@resend.dev>'),
+  EMAIL_REPLY_TO: z.string().optional().or(z.literal('').transform(() => undefined)),
+  /** Comma-separated addresses (or @domain.com). When set, email goes only to these; everyone else is recorded as skipped. */
+  EMAIL_ALLOWLIST: z.string().default(''),
+  /** Where "Send test" goes by default. */
+  EMAIL_TEST_TO: z.string().default(''),
+  /** Resend webhook signing secret (whsec_...), for delivery, bounce and complaint updates. */
+  RESEND_WEBHOOK_SECRET: z.string().optional().or(z.literal('').transform(() => undefined)),
+  /** This API's public URL, used in confirm and unsubscribe links. Defaults to the URL the request came in on. */
+  PUBLIC_API_URL: z.string().url().optional().or(z.literal('').transform(() => undefined)),
   /** Comma-separated phone numbers that can sign in to the admin dashboard (/admin). */
   ADMIN_PHONES: z.string().default(''),
   OTP_DEV_CODE: z

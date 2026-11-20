@@ -19,6 +19,7 @@ import { videoEnabled, videoRoutes } from './routes/video.js'
 import { directoryRoutes } from './routes/directory.js'
 import { accountRoutes } from './routes/account.js'
 import { painChatRoutes } from './routes/painChat.js'
+import { newsletterRoutes } from './routes/newsletter.js'
 import { HttpError } from './util.js'
 
 const app = Fastify({
@@ -75,6 +76,7 @@ await app.register(videoRoutes)
 await app.register(directoryRoutes)
 await app.register(accountRoutes)
 await app.register(painChatRoutes)
+await app.register(newsletterRoutes)
 
 startReminderJob()
 
