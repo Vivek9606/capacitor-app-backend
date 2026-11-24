@@ -34,6 +34,8 @@ const schema = z.object({
   /** Pain chat (consumer app). Without a key the chat runs a fixed list of questions, which is enough to test the flow. */
   ANTHROPIC_API_KEY: z.string().optional().or(z.literal('').transform(() => undefined)),
   PAIN_CHAT_MODEL: z.string().default('claude-opus-5-5'),
+  /** Community safety check (patient details, abuse, spam) on every post. Uses the same Anthropic or Gemini key. */
+  COMMUNITY_CHECK_MODEL: z.string().default('claude-opus-5-5'),
   /** Used for the pain chat when there's no Anthropic key. */
   GEMINI_API_KEY: z.string().optional().or(z.literal('').transform(() => undefined)),
   GEMINI_MODEL: z.string().default('gemini-3.5-flash'),
