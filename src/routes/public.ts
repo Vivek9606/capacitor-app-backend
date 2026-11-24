@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
-import { assertSlotFree, availabilityOf, publicCalendar } from '../calendar.js'
+import { assertSlotFree, availabilityOf, offersVideo, publicCalendar } from '../calendar.js'
 import { one, q, tx } from '../db.js'
 import * as M from '../mappers.js'
 import { hhmm, id, isoDate, visitType } from '../schemas.js'
@@ -49,6 +49,7 @@ export async function publicRoutes(app: FastifyInstance) {
     if (!ph) throw notFound('Profile not found')
     const today = todayIST()
     if (b.visitType === 'home_visit' && !ph.consult?.homeVisit?.enabled) throw badRequest('This physio doesn’t offer home visits')
+    if (b.visitType === 'teleconsult' && !offersVideo(ph)) throw badRequest('This physio doesn’t offer video consults')
     if (b.visitType === 'home_visit' && !b.address) throw badRequest('Add the address for the home visit')
     const dup = await one("select count(*)::int as n from bookings where physio_id = $1 and patient_phone = $2 and status = 'requested' and date >= $3", [ph.id, phone, today])
     if ((dup?.n ?? 0) >= 2) throw new HttpError(429, 'You already have a request waiting. The physio will reply on WhatsApp.', 'too_many_requests')

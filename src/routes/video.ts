@@ -1,5 +1,5 @@
-import type { FastifyInstance } from 'fastify'
-import { AccessToken } from 'livekit-server-sdk'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
+import { AccessToken, RoomServiceClient } from 'livekit-server-sdk'
 import { z } from 'zod'
 import { sessionFrom } from '../auth.js'
 import { visitMinutes } from '../calendar.js'
@@ -21,37 +21,74 @@ function startsAt(date: string, time: string): number {
 
 export const videoEnabled = () => Boolean(env.LIVEKIT_URL && env.LIVEKIT_API_KEY && env.LIVEKIT_API_SECRET)
 
+/** The video-consult booking behind a call request, if the signed-in physio or patient may see it. */
+async function videoBooking(req: FastifyRequest) {
+  const s = sessionFrom(req)
+  if (s.role !== 'physio' && s.role !== 'patient') throw forbidden('Not allowed for this account')
+  const { id } = z.object({ id: z.string().max(40) }).parse(req.params)
+
+  const b = await one(
+    `select b.*, ph.name as physio_name, ph.consult, pt.name as pt_name
+       from bookings b
+       join physios ph on ph.id = b.physio_id
+       left join patients pt on pt.id = $2
+      where b.id = $1`,
+    [id, s.role === 'patient' ? s.sub : null],
+  )
+  if (!b) throw notFound('Appointment not found')
+
+  // Same ownership rules as the rest of the API: physios see their own bookings;
+  // patients see bookings with their physio that carry their id or phone.
+  if (s.role === 'physio' && b.physio_id !== s.sub) throw notFound('Appointment not found')
+  if (s.role === 'patient') {
+    const p = await one('select id, name, phone, physio_id from patients where id = $1', [s.sub])
+    if (!p || b.physio_id !== p.physio_id || (b.patient_id !== p.id && b.patient_phone !== p.phone)) throw notFound('Appointment not found')
+  }
+  if (b.visit_type !== 'teleconsult') throw badRequest('This appointment isn’t a video consult')
+  return { s, b }
+}
+
+let rooms: RoomServiceClient | undefined
+/** Roles ('physio' / 'patient') connected to a LiveKit room right now. Empty when the room doesn't exist yet. */
+async function presence(room: string): Promise<string[]> {
+  rooms ??= new RoomServiceClient(env.LIVEKIT_URL!.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:'), env.LIVEKIT_API_KEY, env.LIVEKIT_API_SECRET)
+  try {
+    const ps = await rooms.listParticipants(room)
+    return ps.map((p) => p.identity.split(':')[0])
+  } catch {
+    return []
+  }
+}
+
 /**
  * 1:1 video for teleconsult bookings (LiveKit).
  * Each booking gets its own room. Only the booking's physio and patient can get a token for it,
  * and only around the appointment time.
  */
 export async function videoRoutes(app: FastifyInstance) {
-  app.post('/bookings/:id/call', async (req) => {
-    const s = sessionFrom(req)
-    if (s.role !== 'physio' && s.role !== 'patient') throw forbidden('Not allowed for this account')
-    if (!videoEnabled()) throw new HttpError(503, 'Video calls aren’t set up yet.', 'video_disabled')
-    const { id } = z.object({ id: z.string().max(40) }).parse(req.params)
-
-    const b = await one(
-      `select b.*, ph.name as physio_name, ph.consult, pt.name as pt_name
-         from bookings b
-         join physios ph on ph.id = b.physio_id
-         left join patients pt on pt.id = $2
-        where b.id = $1`,
-      [id, s.role === 'patient' ? s.sub : null],
-    )
-    if (!b) throw notFound('Appointment not found')
-
-    // Same ownership rules as the rest of the API: physios see their own bookings;
-    // patients see bookings with their physio that carry their id or phone.
-    if (s.role === 'physio' && b.physio_id !== s.sub) throw notFound('Appointment not found')
-    if (s.role === 'patient') {
-      const p = await one('select id, name, phone, physio_id from patients where id = $1', [s.sub])
-      if (!p || b.physio_id !== p.physio_id || (b.patient_id !== p.id && b.patient_phone !== p.phone)) throw notFound('Appointment not found')
+  /** Who is in the call right now (for "Rahul is waiting" on the physio's schedule and in the lobby). Joins nothing. */
+  app.get('/bookings/:id/call', async (req) => {
+    const { s, b } = await videoBooking(req)
+    const inCall = videoEnabled() ? await presence(`bk_${b.id}`) : []
+    const start = startsAt(b.date, b.time)
+    const end = start + (b.minutes ?? visitMinutes(b, 'teleconsult')) * 60_000
+    return {
+      role: s.role,
+      /** False when the physio hasn't accepted it yet, or it was cancelled / is done. */
+      callable: CALLABLE.has(b.status),
+      status: b.status,
+      physioInCall: inCall.includes('physio'),
+      patientInCall: inCall.includes('patient'),
+      opensAt: new Date(start - OPENS_BEFORE_MIN * 60_000).toISOString(),
+      startsAt: new Date(start).toISOString(),
+      endsAt: new Date(end).toISOString(),
+      closesAt: new Date(end + CLOSES_AFTER_MIN * 60_000).toISOString(),
     }
+  })
 
-    if (b.visit_type !== 'teleconsult') throw badRequest('This appointment isn’t a video consult')
+  app.post('/bookings/:id/call', async (req) => {
+    if (!videoEnabled()) throw new HttpError(503, 'Video calls aren’t set up yet.', 'video_disabled')
+    const { s, b } = await videoBooking(req)
     if (!CALLABLE.has(b.status)) throw badRequest('This appointment is closed')
 
     const start = startsAt(b.date, b.time)

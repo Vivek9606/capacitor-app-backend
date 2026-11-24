@@ -34,6 +34,7 @@ export async function physioRoutes(app: FastifyInstance) {
         consult: z.object({
           inClinic: z.object({ enabled: z.boolean(), fee: z.number().int().min(0).max(100000), minutes: z.number().int().min(10).max(240) }),
           homeVisit: z.object({ enabled: z.boolean(), fee: z.number().int().min(0).max(100000), radiusKm: z.number().int().min(0).max(100), minutes: z.number().int().min(10).max(240).optional() }),
+          video: z.object({ enabled: z.boolean(), fee: z.number().int().min(0).max(100000), minutes: z.number().int().min(10).max(240) }).optional(),
         }),
         workingDays: z.array(z.enum(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'])),
         hours: z.object({ start: hhmm, end: hhmm }).nullable(),
