@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { requireRole } from '../auth.js'
-import { assertSlotFree } from '../calendar.js'
+import { assertSlotFree, offersVideo } from '../calendar.js'
 import { one, q, tx } from '../db.js'
 import * as M from '../mappers.js'
 import { hhmm, id, isoDate, signature, visitType } from '../schemas.js'
@@ -109,6 +109,7 @@ export async function patientRoutes(app: FastifyInstance) {
     const open = await one("select count(*)::int as n from bookings where patient_id = $1 and status = 'requested' and date >= $2", [pid, todayIST()])
     if ((open?.n ?? 0) >= 3) throw new HttpError(429, 'You already have requests waiting for your physio', 'too_many_requests')
     const physio = await one('select * from physios where id = $1', [p.physio_id])
+    if (b.visitType === 'teleconsult' && !offersVideo(physio!)) throw badRequest('Your physio doesn’t offer video consults yet')
     await assertSlotFree(physio!, b.date, b.time, b.visitType, { forPatient: true })
     const row = await one(
       `insert into bookings (id, physio_id, patient_id, patient_name, patient_phone, date, time, visit_type, reason, address, is_new_patient, status, send_confirmation, reminder, source, location)

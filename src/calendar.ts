@@ -25,9 +25,17 @@ export function availabilityOf(p: Row) {
   return { weekly: Object.fromEntries(DAYS.map((d) => [d, working.includes(d) ? windows : []])), bufferMin: 0, minNoticeHours: 2, maxDaysAhead: 30 }
 }
 
+/** Video consults default to 30 minutes until the physio sets their own (must match the app's VIDEO_DEFAULT). */
+export const VIDEO_DEFAULT_MINUTES = 30
+
 export function visitMinutes(p: Row, visitType: string): number {
-  return visitType === 'home_visit' ? p.consult?.homeVisit?.minutes || 60 : p.consult?.inClinic?.minutes || 45
+  if (visitType === 'home_visit') return p.consult?.homeVisit?.minutes || 60
+  if (visitType === 'teleconsult') return p.consult?.video?.minutes || VIDEO_DEFAULT_MINUTES
+  return p.consult?.inClinic?.minutes || 45
 }
+
+/** Patients can book a video consult themselves only with physios who offer it (the pain chat's free consult is separate). */
+export const offersVideo = (p: Row) => p.consult?.video?.enabled === true
 
 const bufferAfter = (p: Row, visitType: string) => (availabilityOf(p).bufferMin ?? 0) + (visitType === 'home_visit' ? p.practice?.travelBufferMin ?? 0 : 0)
 
