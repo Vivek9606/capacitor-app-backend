@@ -14,6 +14,9 @@ export type Template =
   | { name: 'physio_reply'; to: string; patientName: string; physioName: string; text: string; url: string }
   | { name: 'consent_request'; to: string; patientName: string; physioName: string; formTitle: string; url: string }
   | { name: 'invoice_shared'; to: string; patientName: string; physioName: string; number: string; amount: string; url: string }
+  // Nudges (jobs/nudges.ts), only to people who opted in to WhatsApp updates
+  | { name: 'health_score_nudge'; to: string; patientName: string; area: string; url: string }
+  | { name: 'exercise_nudge'; to: string; patientName: string; physioName: string; url: string }
 
 function bodyParams(t: Template): string[] {
   switch (t.name) {
@@ -32,6 +35,10 @@ function bodyParams(t: Template): string[] {
       return [t.patientName, t.physioName, t.formTitle, t.url]
     case 'invoice_shared':
       return [t.patientName, t.physioName, t.number, t.amount, t.url]
+    case 'health_score_nudge':
+      return [t.patientName, t.area, t.url]
+    case 'exercise_nudge':
+      return [t.patientName, t.physioName, t.url]
   }
 }
 

@@ -187,6 +187,26 @@ await step('7 Physio ↔ patient', 'care flow', async () => {
   check('7 Physio ↔ patient', 'Physio can switch to a consumer profile (same number)', sw.status === 200 && sw.data?.role === 'patient', JSON.stringify(sw).slice(0, 200))
 })
 
+// ---------------- 7b. notifications ----------------
+await step('7b Notifications', 'push tokens + nudges', async () => {
+  const G = '7b Notifications'
+  const tok = 'e2e-fcm-token-' + RUN + '-'.padEnd(40, 'x')
+  const r = await call('POST', '/me/push-token', { token: tok, platform: 'android' }, ids.appTok)
+  check(G, 'App registers a device for push', r.status === 200, `${r.status} ${JSON.stringify(r.data)}`)
+  const again = await call('POST', '/me/push-token', { token: tok, platform: 'android' }, ids.appTok)
+  check(G, 'Registering the same device again is fine', again.status === 200, again.status)
+  const anon = await call('POST', '/me/push-token', { token: tok, platform: 'android' })
+  check(G, 'Registering without signing in is refused', anon.status === 401, anon.status)
+  const run = await call('POST', '/admin/nudges/run', {}, ids.adminTok)
+  check(G, 'Admin can run the nudge job', run.status === 200 && typeof run.data?.sent === 'number', `${run.status} ${JSON.stringify(run.data)}`)
+  const d = await call('GET', '/admin/dashboard', null, ids.adminTok)
+  const ap = (d.data?.people ?? []).find((x) => x.phone === P.appPatient)
+  check(G, 'Dashboard shows the patient has push on', ap?.pushEnabled === true, JSON.stringify(ap && { pushEnabled: ap.pushEnabled }))
+  check(G, 'Dashboard lists nudges sent', Array.isArray(d.data?.events?.nudges), typeof d.data?.events?.nudges)
+  const del = await call('DELETE', '/me/push-token', { token: tok }, ids.appTok)
+  check(G, 'Signing out removes the device', del.status === 200, del.status)
+})
+
 // ---------------- 8. does admin see every entry, once? ----------------
 await step('8 Admin dashboard', 'visibility', async () => {
   const d = await call('GET', '/admin/dashboard', null, ids.adminTok)

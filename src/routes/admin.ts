@@ -1,3 +1,4 @@
+import { runNudges } from '../jobs/nudges.js'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { requireRole } from '../auth.js'
@@ -8,6 +9,12 @@ import { HttpError, notFound } from '../util.js'
 
 /** Web-only admin dashboard: who signed up, their assessments, and which physio they go to. */
 export async function adminRoutes(app: FastifyInstance) {
+  // Run the nudge job now (any hour): for testing, and to see what would go out.
+  app.post('/admin/nudges/run', async (req) => {
+    requireRole(req, 'admin')
+    return runNudges(new Date(), { anyHour: true })
+  })
+
   app.get('/admin/overview', async (req) => {
     requireRole(req, 'admin')
     const [physios, patients, assessments, listings, counts] = await Promise.all([

@@ -6,6 +6,7 @@ import * as M from '../mappers.js'
 import { sendBookingMessage, webUrl } from '../notify.js'
 import { availability, billing, bookingStatus, hhmm, id, isoDate, planItem, practice, rx, visitType } from '../schemas.js'
 import { badRequest, firstName, linkToken, newId, normalizePhone, notFound, todayIST } from '../util.js'
+import { pushLater } from '../push.js'
 import { sendLater } from '../whatsapp.js'
 
 const MAX_PHOTO = 400_000 // data URL chars (~300 KB image). Move to object storage later.
@@ -225,6 +226,10 @@ export async function physioRoutes(app: FastifyInstance) {
       return r.rows[0]
     })
 
+    {
+      const ph = await one('select name from physios where id = $1', [me])
+      pushLater({ type: 'patient', id: patient.id }, { title: rxOnly ? `New prescription from ${ph!.name}` : `Your care plan from ${ph!.name} is ready`, body: rxOnly ? 'Open the app to see it.' : 'Open the app to start your exercises.', path: '/consumer-dashboard/plan' })
+    }
     if (b.sendWhatsApp) {
       const physio = await one('select name from physios where id = $1', [me])
       const url = webUrl(`/plan/${patient.link_token}`)
@@ -329,6 +334,7 @@ export async function physioRoutes(app: FastifyInstance) {
     const patient = await ownPatient(me, b.patientId)
     const row = await one("insert into messages (id, physio_id, patient_id, sender, text) values ($1,$2,$3,'physio',$4) returning *", [b.id ?? newId('m'), me, patient.id, b.text])
     const physio = await one('select name from physios where id = $1', [me])
+    pushLater({ type: 'patient', id: patient.id }, { title: `${physio!.name} replied`, body: b.text.slice(0, 140), path: '/consumer-dashboard/chat' })
     sendLater({ name: 'physio_reply', to: patient.phone, patientName: firstName(patient.name), physioName: physio!.name, text: b.text.slice(0, 900), url: webUrl(`/plan/${patient.link_token}`) })
     return M.message(row!)
   })
