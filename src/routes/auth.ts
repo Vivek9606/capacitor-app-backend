@@ -115,15 +115,17 @@ export async function authRoutes(app: FastifyInstance) {
         // and the app asks on the consent screen.
         consents: consentItems.optional(),
         channel: z.enum(['web', 'app']).default('app'),
+        // Where the account was made, e.g. 'assessment:assessment-lower-back-pain' (admin dashboard).
+        via: z.string().regex(/^assessment:[a-z0-9-]{3,80}$/).optional(),
       })
       .parse(req.body)
     const phone = verifySignup(body.signupToken)
     const existing = await accountFor(phone)
     if (existing) return { token: signSession({ sub: existing.id, role: existing.role }), role: existing.role, userId: existing.id }
     let row = await one(
-      `insert into patients (id, physio_id, phone, name, age, sex, city, email, since, link_token, self_signup, match_status)
-       values ($1, null, $2, $3, $4, $5, $6, $7, $8, $9, true, 'pending') returning *`,
-      [newId('pt'), phone, body.name, body.age ?? null, body.sex ?? null, body.city || null, body.email || null, todayIST(), linkToken()],
+      `insert into patients (id, physio_id, phone, name, age, sex, city, email, since, link_token, self_signup, match_status, signup_via)
+       values ($1, null, $2, $3, $4, $5, $6, $7, $8, $9, true, 'pending', $10) returning *`,
+      [newId('pt'), phone, body.name, body.age ?? null, body.sex ?? null, body.city || null, body.email || null, todayIST(), linkToken(), body.via ?? null],
     )
     if (body.consents?.length) row = await recordConsents('patient', row!.id, body.consents, body.channel)
     return { token: signSession({ sub: row!.id, role: 'patient' }), role: 'patient', userId: row!.id, patient: M.patient(row!) }
