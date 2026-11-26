@@ -1,5 +1,10 @@
+import { dueNudges, messagingStatus, runNudges, sendNudgeNow } from '../jobs/nudges.js'
+import { webUrl } from '../notify.js'
+import { firstName } from '../util.js'
+import { liveTemplates, sendWhatsApp } from '../whatsapp.js'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
+import { env } from '../env.js'
 import { requireRole } from '../auth.js'
 import { one, q } from '../db.js'
 import { queueSiteRebuild, siteUrl } from '../directory.js'
@@ -8,6 +13,54 @@ import { HttpError, notFound } from '../util.js'
 
 /** Web-only admin dashboard: who signed up, their assessments, and which physio they go to. */
 export async function adminRoutes(app: FastifyInstance) {
+  // Nudges from the dashboard: who's due, send everyone due now (any hour), or one person one nudge.
+  app.get('/admin/nudges/due', async (req) => {
+    requireRole(req, 'admin')
+    return { due: await dueNudges(), enabled: env.NUDGES_ENABLED, push: env.PUSH_PROVIDER, whatsapp: env.WHATSAPP_PROVIDER, liveTemplates: liveTemplates() }
+  })
+  app.get('/admin/messaging', async (req) => {
+    requireRole(req, 'admin')
+    return messagingStatus()
+  })
+  // Send a patient their latest care plan or prescription again on WhatsApp (care_plan_shared / rx_shared).
+  app.post('/admin/whatsapp/resend', async (req) => {
+    const admin = requireRole(req, 'admin')
+    const b = z.object({ patientId: z.string().min(3).max(40), template: z.enum(['care_plan_shared', 'rx_shared']) }).parse(req.body)
+    if (!liveTemplates().includes(b.template)) throw new HttpError(409, 'This WhatsApp message isn’t switched on yet.', 'template_off')
+    const p = await one('select id, name, phone, link_token from patients where id = $1', [b.patientId])
+    if (!p) throw notFound('Patient')
+    const plan = await one(
+      b.template === 'care_plan_shared'
+        ? `select pl.*, ph.name as physio_name from plans pl join physios ph on ph.id = pl.physio_id
+            where pl.patient_id = $1 and jsonb_array_length(pl.items) > 0 order by pl.sent_at desc limit 1`
+        : `select pl.*, ph.name as physio_name from plans pl join physios ph on ph.id = pl.physio_id
+            where pl.patient_id = $1 and pl.rx is not null order by pl.sent_at desc limit 1`,
+      [p.id],
+    )
+    if (!plan) throw new HttpError(409, b.template === 'care_plan_shared' ? 'No care plan to send: their physio hasn’t shared one yet.' : 'No prescription to send: their physio hasn’t shared one yet.', 'not_applicable')
+    const url = webUrl(`/plan/${p.link_token}`)
+    const base = { to: p.phone as string, patientName: firstName(p.name as string), physioName: plan.physio_name as string, url }
+    await sendWhatsApp(
+      b.template === 'care_plan_shared'
+        ? { name: 'care_plan_shared', ...base, summary: `${plan.weeks}-week plan · ${(plan.items as unknown[]).length} exercises · ${plan.days_per_week} days a week` }
+        : { name: 'rx_shared', ...base },
+    )
+    await q(
+      `insert into nudges (subject_type, subject_id, kind, ref, channels, sent_by) values ('patient', $1, $2, $3, $4, $5)`,
+      [p.id, b.template, `manual:${Date.now()}`, ['whatsapp'], admin],
+    )
+    return { sent: true, template: b.template }
+  })
+  app.post('/admin/nudges/run', async (req) => {
+    requireRole(req, 'admin')
+    return runNudges(new Date(), { anyHour: true })
+  })
+  app.post('/admin/nudges/send', async (req) => {
+    const admin = requireRole(req, 'admin')
+    const b = z.object({ patientId: z.string().min(3).max(40), kind: z.enum(['health_score', 'exercise']) }).parse(req.body)
+    return sendNudgeNow(b.patientId, b.kind, admin)
+  })
+
   app.get('/admin/overview', async (req) => {
     requireRole(req, 'admin')
     const [physios, patients, assessments, listings, counts] = await Promise.all([

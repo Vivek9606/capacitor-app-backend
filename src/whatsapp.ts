@@ -14,6 +14,9 @@ export type Template =
   | { name: 'physio_reply'; to: string; patientName: string; physioName: string; text: string; url: string }
   | { name: 'consent_request'; to: string; patientName: string; physioName: string; formTitle: string; url: string }
   | { name: 'invoice_shared'; to: string; patientName: string; physioName: string; number: string; amount: string; url: string }
+  // Nudges (jobs/nudges.ts), only to people who opted in to WhatsApp updates
+  | { name: 'health_score_nudge'; to: string; patientName: string; area: string; url: string }
+  | { name: 'exercise_nudge'; to: string; patientName: string; physioName: string; url: string }
 
 function bodyParams(t: Template): string[] {
   switch (t.name) {
@@ -32,6 +35,10 @@ function bodyParams(t: Template): string[] {
       return [t.patientName, t.physioName, t.formTitle, t.url]
     case 'invoice_shared':
       return [t.patientName, t.physioName, t.number, t.amount, t.url]
+    case 'health_score_nudge':
+      return [t.patientName, t.area, t.url]
+    case 'exercise_nudge':
+      return [t.patientName, t.physioName, t.url]
   }
 }
 
@@ -45,6 +52,13 @@ const list = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean)
 const last10 = (phone: string) => phone.replace(/\D/g, '').slice(-10)
 const allowlist = new Set(list(env.WHATSAPP_ALLOWLIST).map(last10))
 const enabledTemplates = new Set(list(env.WHATSAPP_TEMPLATES))
+
+/** Templates that really go out right now (provider set, and in WHATSAPP_TEMPLATES when that's set). */
+export function liveTemplates(): string[] {
+  if (env.WHATSAPP_PROVIDER === 'log') return []
+  const all = ['auth_otp', 'care_plan_shared', 'rx_shared', 'booking_confirmation', 'booking_reminder', 'physio_reply', 'consent_request', 'invoice_shared', 'health_score_nudge', 'exercise_nudge']
+  return enabledTemplates.size ? all.filter((n) => enabledTemplates.has(n)) : all
+}
 
 function logOnly(t: Template, reason: string) {
   // Never log OTP codes in production logs.

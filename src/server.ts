@@ -4,6 +4,7 @@ import Fastify from 'fastify'
 import { ZodError } from 'zod'
 import { pool } from './db.js'
 import { env, isProd } from './env.js'
+import { startNudgeJob } from './jobs/nudges.js'
 import { startReminderJob } from './jobs/reminders.js'
 import { authRoutes } from './routes/auth.js'
 import { meRoutes } from './routes/me.js'
@@ -81,6 +82,7 @@ await app.register(newsletterRoutes)
 await app.register(communityRoutes)
 
 startReminderJob()
+startNudgeJob()
 
 await app.listen({ port: env.PORT, host: '0.0.0.0' })
 console.log(`Betterhood API on :${env.PORT}`)

@@ -187,6 +187,43 @@ await step('7 Physio ↔ patient', 'care flow', async () => {
   check('7 Physio ↔ patient', 'Physio can switch to a consumer profile (same number)', sw.status === 200 && sw.data?.role === 'patient', JSON.stringify(sw).slice(0, 200))
 })
 
+// ---------------- 7b. notifications ----------------
+await step('7b Notifications', 'push tokens + nudges', async () => {
+  const G = '7b Notifications'
+  const tok = 'e2e-fcm-token-' + RUN + '-'.padEnd(40, 'x')
+  const r = await call('POST', '/me/push-token', { token: tok, platform: 'android' }, ids.appTok)
+  check(G, 'App registers a device for push', r.status === 200, `${r.status} ${JSON.stringify(r.data)}`)
+  const again = await call('POST', '/me/push-token', { token: tok, platform: 'android' }, ids.appTok)
+  check(G, 'Registering the same device again is fine', again.status === 200, again.status)
+  const anon = await call('POST', '/me/push-token', { token: tok, platform: 'android' })
+  check(G, 'Registering without signing in is refused', anon.status === 401, anon.status)
+  const run = await call('POST', '/admin/nudges/run', {}, ids.adminTok)
+  check(G, 'Admin can run the nudge job', run.status === 200 && typeof run.data?.sent === 'number', `${run.status} ${JSON.stringify(run.data)}`)
+  const d = await call('GET', '/admin/dashboard', null, ids.adminTok)
+  const ap = (d.data?.people ?? []).find((x) => x.phone === P.appPatient)
+  check(G, 'Dashboard shows the patient has push on', ap?.pushEnabled === true, JSON.stringify(ap && { pushEnabled: ap.pushEnabled }))
+  check(G, 'Dashboard lists nudges sent', Array.isArray(d.data?.events?.nudges), typeof d.data?.events?.nudges)
+  const due = await call('GET', '/admin/nudges/due', null, ids.adminTok)
+  check(G, 'Admin sees who is due a nudge', due.status === 200 && Array.isArray(due.data?.due), `${due.status} ${JSON.stringify(due.data).slice(0, 200)}`)
+  const ex = await call('POST', '/admin/nudges/send', { patientId: ids.appPatient, kind: 'exercise' }, ids.adminTok)
+  check(G, 'Admin sends an exercise nudge to a patient with a care plan', ex.status === 200 && Array.isArray(ex.data?.channels), `${ex.status} ${JSON.stringify(ex.data)}`)
+  const hs = await call('POST', '/admin/nudges/send', { patientId: ids.appPatient, kind: 'health_score' }, ids.adminTok)
+  check(G, 'Admin sends a health score nudge after a pain assessment', hs.status === 200, `${hs.status} ${JSON.stringify(hs.data)}`)
+  const none = await call('POST', '/admin/nudges/send', { patientId: ids.webPatient, kind: 'exercise' }, ids.adminTok)
+  check(G, 'Nudging someone with no care plan is refused with a reason', none.status === 409 && /care plan/.test(none.data?.message ?? ''), `${none.status} ${JSON.stringify(none.data)}`)
+  const asPatient = await call('POST', '/admin/nudges/send', { patientId: ids.appPatient, kind: 'exercise' }, ids.appTok)
+  check(G, 'A patient cannot send nudges', asPatient.status === 403, asPatient.status)
+  const d2 = await call('GET', '/admin/dashboard', null, ids.adminTok)
+  const mine = (d2.data?.events?.nudges ?? []).filter((n) => n.who === ids.appPatient && n.manual)
+  check(G, 'Dashboard lists the nudges the admin sent', mine.length >= 2, JSON.stringify(mine))
+  const ms = await call('GET', '/admin/messaging', null, ids.adminTok)
+  check(G, 'Dashboard can see which WhatsApp messages are live', ms.status === 200 && Array.isArray(ms.data?.liveTemplates), `${ms.status} ${JSON.stringify(ms.data)}`)
+  const rs = await call('POST', '/admin/whatsapp/resend', { patientId: ids.webPatient, template: 'care_plan_shared' }, ids.adminTok)
+  check(G, 'Resending a care plan to someone without one is refused', rs.status === 409, `${rs.status} ${JSON.stringify(rs.data)}`)
+  const del = await call('DELETE', '/me/push-token', { token: tok }, ids.appTok)
+  check(G, 'Signing out removes the device', del.status === 200, del.status)
+})
+
 // ---------------- 8. does admin see every entry, once? ----------------
 await step('8 Admin dashboard', 'visibility', async () => {
   const d = await call('GET', '/admin/dashboard', null, ids.adminTok)

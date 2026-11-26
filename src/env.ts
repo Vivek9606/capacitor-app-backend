@@ -16,6 +16,12 @@ const schema = z.object({
    *  When set, saving a directory listing triggers a website rebuild so it goes live within minutes. */
   SITE_REBUILD_REPO: z.string().regex(/^[\w.-]+\/[\w.-]+$/).optional().or(z.literal('').transform(() => undefined)),
   SITE_REBUILD_TOKEN: z.string().optional(),
+  /** Push notifications to the app. log = only logged. fcm = Firebase Cloud Messaging, needs FCM_SERVICE_ACCOUNT. */
+  PUSH_PROVIDER: z.enum(['log', 'fcm']).default('log'),
+  /** The Firebase service-account JSON (one secret). */
+  FCM_SERVICE_ACCOUNT: z.string().optional().or(z.literal('').transform(() => undefined)),
+  /** Engagement nudges (health score, exercises) by push and WhatsApp. "false" turns them off. */
+  NUDGES_ENABLED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
   WHATSAPP_PROVIDER: z.enum(['log', 'meta', 'kwikengage']).default('log'),
   KWIKENGAGE_API_KEY: z.string().optional(),
   KWIKENGAGE_URL: z.string().url().default('https://api.kwikengage.ai/send-message/v2'),

@@ -28,7 +28,7 @@ export const STEPS = ['details', 'assessed', 'account', 'matched', 'booked', 'pl
 type Step = (typeof STEPS)[number]
 
 const PATIENT_SQL = `
-  select p.id, p.name, p.phone, p.email, p.city, p.self_signup, p.signup_via, p.created_at, p.last_seen_at, p.consent_at, p.discharged_at,
+  select p.id, p.name, p.phone, p.email, p.city, p.self_signup, p.signup_via, p.whatsapp_opt_in, p.created_at, p.last_seen_at, p.consent_at, p.discharged_at,
          p.physio_id, p.matched_at, p.match_status, ph.name as physio_name,
          a.first_at as first_assessment_at, a.n as assessments,
          la.title as la_title, la.condition as la_condition, la.scores as la_scores, la.area as la_area, la.kind as la_kind,
@@ -65,7 +65,7 @@ const PATIENT_SQL = `
 export async function adminDashboardRoutes(app: FastifyInstance) {
   app.get('/admin/dashboard', async (req) => {
     requireRole(req, 'admin')
-    const [patients, web, assessments, sessions, payments, bookings, physios, tests, leadTags] = await Promise.all([
+    const [patients, web, assessments, sessions, payments, bookings, physios, tests, leadTags, nudgeRows, pushRows] = await Promise.all([
       q(`${PATIENT_SQL} order by p.created_at`),
       q(
         `select id, kind, form, name, phone, email, created_at, claimed_by, disowned, result_id,
@@ -80,8 +80,11 @@ export async function adminDashboardRoutes(app: FastifyInstance) {
       q(`${PHYSIO_SQL} order by ph.created_at`),
       q<{ phone: string }>('select phone from test_contacts'),
       q(`select subject_id, tags from admin_tags where subject_type = 'lead'`),
+      q(`select sent_at, subject_id, kind, channels, sent_by from nudges where subject_type = 'patient'`),
+      q<{ subject_id: string }>(`select distinct subject_id from push_tokens where subject_type = 'patient'`),
     ])
     const testPhones = new Set(tests.map((t) => t.phone))
+    const pushIds = new Set(pushRows.map((r) => r.subject_id))
     const physioPhones = new Set(physios.map((p) => p.phone))
     const byPhone = new Map(patients.map((p) => [p.phone as string, p]))
 
@@ -130,6 +133,8 @@ export async function adminDashboardRoutes(app: FastifyInstance) {
         test: testPhones.has(p.phone),
         alsoPhysio: physioPhones.has(p.phone),
         source,
+        pushEnabled: pushIds.has(p.id),
+        whatsappOptIn: p.whatsapp_opt_in ?? undefined,
         // e.g. 'assessment:assessment-lower-back-pain': the account was made by finishing that assessment
         signupVia: (p.signup_via as string | null) ?? undefined,
         steps,
@@ -239,6 +244,8 @@ export async function adminDashboardRoutes(app: FastifyInstance) {
       physios: physioList,
       events: {
         assessments: assessmentEvents,
+        // Engagement nudges sent (jobs/nudges.ts). channels empty = nothing could go out (no app device, no WhatsApp opt-in, or providers off).
+        nudges: nudgeRows.map((n) => ({ at: iso(n.sent_at)!, who: n.subject_id as string, kind: n.kind as string, channels: (n.channels as string[]) ?? [], manual: !!n.sent_by })),
         sessions: sessions.map((s) => ({ at: dayIso(s.day)!, who: s.patient_id as string, physioId: s.physio_id as string })),
         bookings: bookings.map((b) => ({
           at: iso(b.created_at)!,

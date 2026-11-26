@@ -17,6 +17,26 @@ function seen(table: 'physios' | 'patients', id: string) {
 }
 
 export async function meRoutes(app: FastifyInstance) {
+  // The app registers this device for push notifications after sign-in (and whenever Firebase rotates the token).
+  app.post('/me/push-token', async (req) => {
+    const s = sessionFrom(req)
+    if (s.role === 'admin') throw new HttpError(403, 'Not allowed for this account', 'forbidden')
+    const b = z.object({ token: z.string().min(20).max(4096), platform: z.enum(['android', 'ios', 'web']) }).parse(req.body)
+    await q(
+      `insert into push_tokens (token, subject_type, subject_id, platform) values ($1, $2, $3, $4)
+       on conflict (token) do update set subject_type = excluded.subject_type, subject_id = excluded.subject_id, platform = excluded.platform, last_seen_at = now()`,
+      [b.token, s.role, s.sub, b.platform],
+    )
+    return { ok: true }
+  })
+  // Signing out on a device: stop sending to it.
+  app.delete('/me/push-token', async (req) => {
+    const s = sessionFrom(req)
+    const b = z.object({ token: z.string().min(20).max(4096) }).parse(req.body)
+    await q('delete from push_tokens where token = $1 and subject_type = $2 and subject_id = $3', [b.token, s.role, s.sub])
+    return { ok: true }
+  })
+
   // Record consents for the signed-in physio or patient (e.g. the WhatsApp updates choice made at sign-in).
   app.post('/me/consents', async (req) => {
     const s = sessionFrom(req)
