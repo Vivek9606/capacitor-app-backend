@@ -1,6 +1,7 @@
-import { runNudges } from '../jobs/nudges.js'
+import { dueNudges, runNudges, sendNudgeNow } from '../jobs/nudges.js'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
+import { env } from '../env.js'
 import { requireRole } from '../auth.js'
 import { one, q } from '../db.js'
 import { queueSiteRebuild, siteUrl } from '../directory.js'
@@ -9,10 +10,19 @@ import { HttpError, notFound } from '../util.js'
 
 /** Web-only admin dashboard: who signed up, their assessments, and which physio they go to. */
 export async function adminRoutes(app: FastifyInstance) {
-  // Run the nudge job now (any hour): for testing, and to see what would go out.
+  // Nudges from the dashboard: who's due, send everyone due now (any hour), or one person one nudge.
+  app.get('/admin/nudges/due', async (req) => {
+    requireRole(req, 'admin')
+    return { due: await dueNudges(), enabled: env.NUDGES_ENABLED, push: env.PUSH_PROVIDER, whatsapp: env.WHATSAPP_PROVIDER }
+  })
   app.post('/admin/nudges/run', async (req) => {
     requireRole(req, 'admin')
     return runNudges(new Date(), { anyHour: true })
+  })
+  app.post('/admin/nudges/send', async (req) => {
+    const admin = requireRole(req, 'admin')
+    const b = z.object({ patientId: z.string().min(3).max(40), kind: z.enum(['health_score', 'exercise']) }).parse(req.body)
+    return sendNudgeNow(b.patientId, b.kind, admin)
   })
 
   app.get('/admin/overview', async (req) => {

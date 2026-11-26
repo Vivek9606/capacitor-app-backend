@@ -80,7 +80,7 @@ export async function adminDashboardRoutes(app: FastifyInstance) {
       q(`${PHYSIO_SQL} order by ph.created_at`),
       q<{ phone: string }>('select phone from test_contacts'),
       q(`select subject_id, tags from admin_tags where subject_type = 'lead'`),
-      q(`select sent_at, subject_id, kind, channels from nudges where subject_type = 'patient'`),
+      q(`select sent_at, subject_id, kind, channels, sent_by from nudges where subject_type = 'patient'`),
       q<{ subject_id: string }>(`select distinct subject_id from push_tokens where subject_type = 'patient'`),
     ])
     const testPhones = new Set(tests.map((t) => t.phone))
@@ -245,7 +245,7 @@ export async function adminDashboardRoutes(app: FastifyInstance) {
       events: {
         assessments: assessmentEvents,
         // Engagement nudges sent (jobs/nudges.ts). channels empty = nothing could go out (no app device, no WhatsApp opt-in, or providers off).
-        nudges: nudgeRows.map((n) => ({ at: iso(n.sent_at)!, who: n.subject_id as string, kind: n.kind as string, channels: (n.channels as string[]) ?? [] })),
+        nudges: nudgeRows.map((n) => ({ at: iso(n.sent_at)!, who: n.subject_id as string, kind: n.kind as string, channels: (n.channels as string[]) ?? [], manual: !!n.sent_by })),
         sessions: sessions.map((s) => ({ at: dayIso(s.day)!, who: s.patient_id as string, physioId: s.physio_id as string })),
         bookings: bookings.map((b) => ({
           at: iso(b.created_at)!,
