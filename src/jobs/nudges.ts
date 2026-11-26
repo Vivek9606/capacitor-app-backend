@@ -3,7 +3,7 @@ import { env } from '../env.js'
 import { webUrl } from '../notify.js'
 import { sendPush } from '../push.js'
 import { HttpError } from '../util.js'
-import { sendWhatsApp } from '../whatsapp.js'
+import { liveTemplates, sendWhatsApp } from '../whatsapp.js'
 
 /**
  * Engagement nudges for patients, by push (any device they're signed in on) and WhatsApp (only if they opted in to
@@ -95,6 +95,11 @@ async function exerciseDue(f: Filter, now: Date): Promise<Candidate[]> {
     push: { title: 'Your exercises are waiting', body: `${first(r.name)}, a few minutes today keeps your recovery on track. ${r.physio_name} can see how you're doing.`, path: '/consumer-dashboard/session' },
     whatsapp: r.whatsapp_opt_in ? { name: 'exercise_nudge', to: r.phone, patientName: first(r.name), physioName: r.physio_name, url: webUrl(`/plan/${r.link_token}`) } : null,
   }))
+}
+
+/** What can reach people right now, for the dashboard to enable or disable its buttons. */
+export function messagingStatus() {
+  return { nudgesEnabled: env.NUDGES_ENABLED, push: env.PUSH_PROVIDER, whatsapp: env.WHATSAPP_PROVIDER, liveTemplates: liveTemplates() }
 }
 
 /** Who the automatic job would nudge next (whatever the hour), and whether anything could reach them. */

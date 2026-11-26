@@ -53,6 +53,13 @@ const last10 = (phone: string) => phone.replace(/\D/g, '').slice(-10)
 const allowlist = new Set(list(env.WHATSAPP_ALLOWLIST).map(last10))
 const enabledTemplates = new Set(list(env.WHATSAPP_TEMPLATES))
 
+/** Templates that really go out right now (provider set, and in WHATSAPP_TEMPLATES when that's set). */
+export function liveTemplates(): string[] {
+  if (env.WHATSAPP_PROVIDER === 'log') return []
+  const all = ['auth_otp', 'care_plan_shared', 'rx_shared', 'booking_confirmation', 'booking_reminder', 'physio_reply', 'consent_request', 'invoice_shared', 'health_score_nudge', 'exercise_nudge']
+  return enabledTemplates.size ? all.filter((n) => enabledTemplates.has(n)) : all
+}
+
 function logOnly(t: Template, reason: string) {
   // Never log OTP codes in production logs.
   const shown = t.name === 'auth_otp' && process.env.NODE_ENV === 'production' ? '[code hidden]' : bodyParams(t).join(' | ')
