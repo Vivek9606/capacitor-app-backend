@@ -368,6 +368,8 @@ export function confirmContent(): EmailContent {
 
 // ---------- sending ----------
 const list = (s: string) => s.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)
+/** Reserved test domains (RFC 2606): never sent, so test runs can't bounce and hurt the domain's reputation. */
+export const isTestAddress = (email: string) => /@(?:[^@]+\.)?example\.(?:com|org|net)$|\.(?:test|invalid|example|localhost)$/i.test(email.trim())
 const allow = list(env.EMAIL_ALLOWLIST)
 export function emailAllowed(to: string) {
   if (!allow.length) return true
@@ -419,7 +421,8 @@ export async function sendEmails(msgs: OutEmail[], idempotencyKey?: string): Pro
   const out: SendResult[] = new Array(msgs.length)
   const go: number[] = []
   msgs.forEach((m, i) => {
-    if (!emailAllowed(m.to)) out[i] = { status: 'skipped', error: 'Not in EMAIL_ALLOWLIST (test mode)' }
+    if (isTestAddress(m.to)) out[i] = { status: 'skipped', error: 'Test address (example.com, .test, .invalid): never sent' }
+    else if (!emailAllowed(m.to)) out[i] = { status: 'skipped', error: 'Not in EMAIL_ALLOWLIST (test mode)' }
     else if (!env.RESEND_API_KEY) {
       console.log(`[email] logged (no RESEND_API_KEY) to ${m.to.replace(/^(.).*@/, '$1***@')} :: ${m.subject}`)
       out[i] = { status: 'skipped', error: 'Resend not connected: logged only' }
