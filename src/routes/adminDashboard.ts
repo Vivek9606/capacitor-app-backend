@@ -28,7 +28,7 @@ export const STEPS = ['details', 'assessed', 'account', 'matched', 'booked', 'pl
 type Step = (typeof STEPS)[number]
 
 const PATIENT_SQL = `
-  select p.id, p.name, p.phone, p.email, p.city, p.self_signup, p.created_at, p.last_seen_at, p.consent_at, p.discharged_at,
+  select p.id, p.name, p.phone, p.email, p.city, p.self_signup, p.signup_via, p.created_at, p.last_seen_at, p.consent_at, p.discharged_at,
          p.physio_id, p.matched_at, p.match_status, ph.name as physio_name,
          a.first_at as first_assessment_at, a.n as assessments,
          la.title as la_title, la.condition as la_condition, la.scores as la_scores, la.area as la_area, la.kind as la_kind,
@@ -116,7 +116,7 @@ export async function adminDashboardRoutes(app: FastifyInstance) {
         improved: min(iso(p.discharged_at), dayIso(p.improved_date)),
       }
       const lastActiveAt = max(iso(p.last_seen_at), lastSessionAt, iso(p.last_booking_at), iso(p.last_message_at), iso(p.la_at), firstWeb, ...subs.map((w) => iso(w.created_at)), created)!
-      const source = !p.self_signup ? 'physio' : (firstWeb && firstWeb < created) || p.web_consent_at ? 'website' : 'app'
+      const source = !p.self_signup ? 'physio' : (firstWeb && firstWeb < created) || p.web_consent_at || p.signup_via ? 'website' : 'app'
       const reasons: string[] = p.la_reasons ?? []
       keyOfPatient.set(p.id, p.id)
       people.push({
@@ -130,6 +130,8 @@ export async function adminDashboardRoutes(app: FastifyInstance) {
         test: testPhones.has(p.phone),
         alsoPhysio: physioPhones.has(p.phone),
         source,
+        // e.g. 'assessment:assessment-lower-back-pain': the account was made by finishing that assessment
+        signupVia: (p.signup_via as string | null) ?? undefined,
         steps,
         lastActiveAt,
         lastSessionAt,

@@ -10,7 +10,7 @@ const results = []
 const ids = {}
 const B = 9100000000 + Math.floor(Math.random() * 90000) * 100
 const n = (k) => String(B + k)
-const P = { webLead: n(1), contact: n(2), appPatient: n(3), invited: n(4), corp: n(5), dirPhysio: n(10), appPhysio: n(11), admin: process.env.E2E_ADMIN }
+const P = { webLead: n(1), contact: n(2), appPatient: n(3), invited: n(4), corp: n(5), atAssessment: n(6), badVia: n(7), dirPhysio: n(10), appPhysio: n(11), admin: process.env.E2E_ADMIN }
 
 async function call(method, path, body, token, origin = ORIGIN) {
   const res = await fetch(API + path, {
@@ -88,6 +88,25 @@ await step('2 Website → account', 'signup + claim', async () => {
   check('2 Website → account', 'Claiming them saves them to the account', c.status === 200 && (c.data?.assessments?.length ?? 0) >= 1, JSON.stringify(c.data).slice(0, 300))
   const b = await call('GET', '/me/bootstrap', null, ids.webTok)
   check('2 Website → account', 'App bootstrap loads for this patient', b.status === 200, b.status)
+})
+
+// ---------------- 2b. account made by finishing an assessment, then the health score ----------------
+await step('2b Account at assessment', 'signup via assessment', async () => {
+  const G = '2b Account at assessment'
+  const v = await login(P.atAssessment)
+  const s = await call('POST', '/auth/signup-patient', { signupToken: v.signupToken, name: 'E2E Assessment Signup', email: 'e2e.asmt@example.com', via: 'assessment:assessment-lower-back-pain', consents: terms.slice(0, 2), channel: 'web' })
+  check(G, 'Finishing a pain assessment creates the account (sign-up "via" the assessment)', s.status === 200 && s.data?.role === 'patient', JSON.stringify(s))
+  ids.asmtTok = s.data?.token
+  const bad = await call('POST', '/auth/signup-patient', { signupToken: (await login(P.badVia)).signupToken, name: 'E2E Bad Via', via: 'javascript:alert(1)', consents: terms.slice(0, 2), channel: 'web' })
+  check(G, 'A malformed "via" is rejected', bad.status === 400, bad.status)
+  const pain = await call('POST', '/patient/assessments', {
+    id: 'as_wasm' + RUN + 'p1', slug: 'assessment-lower-back-pain', kind: 'pain', area: 'back', title: 'Lower Back Pain', cat: 'muscle', condition: 'Muscular Imbalance', result: 'result-lower-back-pain-muscle', totals: { muscle: 9 }, source: 'web', takenAt: new Date().toISOString(), formVersion: 'e2e',
+  }, ids.asmtTok)
+  check(G, 'The pain result is saved to the new account', pain.status === 200, JSON.stringify(pain))
+  const health = await call('POST', '/patient/assessments', {
+    id: 'as_wasm' + RUN + 'h1', slug: 'assessment-back-health', kind: 'health', area: 'back', title: 'Back Health', totals: {}, scores: { overall: 6.2, strength: 5, balance: 7, mobility: 6.5 }, source: 'web', takenAt: new Date(Date.now() + 60e3).toISOString(), formVersion: 'e2e',
+  }, ids.asmtTok)
+  check(G, 'The health score taken next is saved too', health.status === 200, JSON.stringify(health))
 })
 
 // ---------------- 3. app-only patient ----------------
@@ -179,6 +198,11 @@ await step('8 Admin dashboard', 'visibility', async () => {
   check('8 Admin dashboard', '…shown as an account whose source is "website"', web[0]?.kind === 'account' && web[0]?.source === 'website', JSON.stringify(web[0] && { kind: web[0].kind, source: web[0].source }))
   check('8 Admin dashboard', '…with "details", "assessed" and "account" steps reached', web[0]?.steps?.details && web[0]?.steps?.assessed && web[0]?.steps?.account, JSON.stringify(web[0]?.steps))
   check('8 Admin dashboard', '…first contact is not later than first assessment', !web[0] || web[0].steps.details <= web[0].steps.assessed, JSON.stringify(web[0]?.steps))
+  const asm = byPhone(P.atAssessment)
+  check('8 Admin dashboard', 'Account made at an assessment = ONE person, source "website"', asm.length === 1 && asm[0].source === 'website', JSON.stringify(asm.map((x) => ({ kind: x.kind, source: x.source }))))
+  check('8 Admin dashboard', '…shows which assessment created the account', asm[0]?.signupVia === 'assessment:assessment-lower-back-pain', asm[0]?.signupVia)
+  const asmEv = (d.data?.events?.assessments ?? []).filter((e) => e.who === asm[0]?.key)
+  check('8 Admin dashboard', '…with the pain assessment and the health score that followed', asmEv.some((e) => e.kind === 'pain') && asmEv.some((e) => e.kind === 'health'), JSON.stringify(asmEv.map((e) => e.kind)))
   const lead = byPhone(P.contact)
   check('8 Admin dashboard', 'Contact-form lead appears as a "Website only" person', lead.length === 1 && lead[0].kind === 'website', JSON.stringify(lead.map((x) => x.kind)))
   check('8 Admin dashboard', '…all 3 of their forms counted on one row', lead[0]?.counts?.websiteSubmissions === 3, JSON.stringify(lead[0]?.counts))
