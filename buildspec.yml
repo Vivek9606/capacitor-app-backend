@@ -1,0 +1,17 @@
+# AWS CodeBuild: builds the backend image and pushes it to ECR (betterhood-backend).
+version: 0.2
+env:
+  variables:
+    DOCKER_BUILDKIT: "1"
+phases:
+  pre_build:
+    commands:
+      - AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID:-$(aws sts get-caller-identity --query Account --output text)}
+      - REPO=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/betterhood-backend
+      - aws ecr get-login-password | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+  build:
+    commands:
+      - docker build -t $REPO:$IMAGE_TAG .
+  post_build:
+    commands:
+      - docker push $REPO:$IMAGE_TAG
