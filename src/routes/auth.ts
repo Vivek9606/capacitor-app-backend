@@ -115,8 +115,8 @@ export async function authRoutes(app: FastifyInstance) {
         // and the app asks on the consent screen.
         consents: consentItems.optional(),
         channel: z.enum(['web', 'app']).default('app'),
-        // Where the account was made, e.g. 'assessment:assessment-lower-back-pain' (admin dashboard).
-        via: z.string().regex(/^assessment:[a-z0-9-]{3,80}$/).optional(),
+        // Where the account was made: an assessment, or Slouch Catcher (sharing a catch for points).
+        via: z.string().regex(/^(assessment:[a-z0-9-]{3,80}|slouch-catcher)$/).optional(),
       })
       .parse(req.body)
     const phone = verifySignup(body.signupToken)
