@@ -65,7 +65,7 @@ const PATIENT_SQL = `
 export async function adminDashboardRoutes(app: FastifyInstance) {
   app.get('/admin/dashboard', async (req) => {
     requireRole(req, 'admin')
-    const [patients, web, assessments, sessions, payments, bookings, physios, tests, leadTags, nudgeRows, pushRows] = await Promise.all([
+    const [patients, web, assessments, sessions, payments, bookings, physios, tests, leadTags, nudgeRows, pushRows, slouchChecks, slouchCatches, slouchCoupons, slouchPoints] = await Promise.all([
       q(`${PATIENT_SQL} order by p.created_at`),
       q(
         `select id, kind, form, name, phone, email, created_at, claimed_by, disowned, result_id,
@@ -82,6 +82,11 @@ export async function adminDashboardRoutes(app: FastifyInstance) {
       q(`select subject_id, tags from admin_tags where subject_type = 'lead'`),
       q(`select sent_at, subject_id, kind, channels, sent_by from nudges where subject_type = 'patient'`),
       q<{ subject_id: string }>(`select distinct subject_id from push_tokens where subject_type = 'patient'`),
+      // Slouch Catcher (betterhood.in/slouch-catcher/): photos checked (no one attached), catches shared, joins, coupons.
+      q(`select created_at, test from slouch_analyses where created_at > now() - interval '400 days'`),
+      q(`select code, catcher_phone, catcher_name, target_name, target_phone, persona, score, created_at, joined_at from slouch_catches`),
+      q(`select phone, value_inr, source, created_at from slouch_coupons`),
+      q(`select phone, coalesce(sum(delta), 0)::int as points from slouch_points group by phone`),
     ])
     const testPhones = new Set(tests.map((t) => t.phone))
     const pushIds = new Set(pushRows.map((r) => r.subject_id))
@@ -97,6 +102,22 @@ export async function adminDashboardRoutes(app: FastifyInstance) {
       webByPhone.get(k)!.push(w)
     }
     const assessmentIds = new Set(assessments.map((a) => a.id))
+    // Slouch Catcher per phone: points, catches shared, the catch they joined from, coupons.
+    const slouchPointsBy = new Map(slouchPoints.map((r) => [r.phone as string, r.points as number]))
+    const slouchOf = (phone: string) => {
+      const shared = slouchCatches.filter((c) => c.catcher_phone === phone)
+      const joinedFrom = slouchCatches.find((c) => c.target_phone === phone)
+      const coupons = slouchCoupons.filter((c) => c.phone === phone)
+      if (!shared.length && !joinedFrom && !coupons.length && !slouchPointsBy.has(phone)) return undefined
+      return {
+        points: slouchPointsBy.get(phone) ?? 0,
+        catches: shared.length,
+        joins: shared.filter((c) => c.joined_at).length,
+        joinedFrom: joinedFrom ? { catcher: (joinedFrom.catcher_name as string | null) ?? 'A friend', at: iso(joinedFrom.joined_at)! } : undefined,
+        coupons: coupons.map((c) => ({ value: c.value_inr as number, at: iso(c.created_at)!, test: c.source === 'test' })),
+        recent: shared.slice(-5).reverse().map((c) => ({ target: c.target_name as string, persona: c.persona as string, score: Number(c.score), at: iso(c.created_at)!, joined: !!c.joined_at })),
+      }
+    }
     const leadTagsBy = new Map(leadTags.map((t) => [t.subject_id, t.tags as string[]]))
 
     const people = []
@@ -137,6 +158,7 @@ export async function adminDashboardRoutes(app: FastifyInstance) {
         whatsappOptIn: p.whatsapp_opt_in ?? undefined,
         // e.g. 'assessment:assessment-lower-back-pain': the account was made by finishing that assessment
         signupVia: (p.signup_via as string | null) ?? undefined,
+        slouch: slouchOf(p.phone),
         steps,
         lastActiveAt,
         lastSessionAt,
@@ -259,6 +281,13 @@ export async function adminDashboardRoutes(app: FastifyInstance) {
           patientJoinedAt: iso(b.patient_joined_at),
         })),
         payments: payments.map((x) => ({ at: iso(x.paid_at)!, who: x.patient_id as string | null, physioId: x.physio_id as string, amount: Number(x.total) })),
+        // Slouch Catcher. who: the person key (null when that phone is only a physio). Checks have no one attached.
+        slouch: {
+          checks: slouchChecks.map((c) => ({ at: iso(c.created_at)!, test: !!c.test })),
+          catches: slouchCatches.map((c) => ({ at: iso(c.created_at)!, who: keyOfPhone(c.catcher_phone) })),
+          joins: slouchCatches.filter((c) => c.joined_at).map((c) => ({ at: iso(c.joined_at)!, who: keyOfPhone(c.target_phone), catcher: keyOfPhone(c.catcher_phone) })),
+          coupons: slouchCoupons.map((c) => ({ at: iso(c.created_at)!, who: keyOfPhone(c.phone), value: c.value_inr as number, test: c.source === 'test' })),
+        },
         // Website submissions without a phone (nobody to attach them to), for the website total only.
         anonymous: web.filter((w) => !w.phone).map((w) => ({ at: iso(w.created_at)!, kind: w.kind as string })),
       },
