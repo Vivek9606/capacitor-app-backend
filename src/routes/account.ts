@@ -56,20 +56,6 @@ export async function accountRoutes(app: FastifyInstance) {
     return { name: ph.name, slug: ph.dir_slug }
   })
 
-  // Who this session belongs to, for betterhood's own side services (Slouch Catcher). They forward the
-  // visitor's bearer token here instead of running a second phone sign-in. It returns the account's own
-  // number unmasked (the caller is that same person) so points and leads line up with the account.
-  // Rate-limited per session, not per IP: every lookup comes from the side service's one server address.
-  const perSession = { config: { rateLimit: { max: 60, timeWindow: '1 minute', keyGenerator: (r: { headers: { authorization?: string }; ip: string }) => r.headers.authorization ?? r.ip } } }
-  app.get('/me/identity', perSession, async (req) => {
-    const s = sessionFrom(req)
-    if (s.role === 'admin') throw new HttpError(403, 'Not allowed for this account', 'forbidden')
-    const me = await one<{ name: string | null; phone: string }>(
-      `select name, phone from ${s.role === 'physio' ? 'physios' : 'patients'} where id = $1`, [s.sub])
-    if (!me) throw new HttpError(401, 'Account not found', 'unauthenticated')
-    return { userId: s.sub, role: s.role, name: me.name ?? '', phone: me.phone }
-  })
-
   // A light "who am I" for the website: name, which profiles this number has, and what to show next.
   app.get('/me/summary', async (req) => {
     const s = sessionFrom(req)
