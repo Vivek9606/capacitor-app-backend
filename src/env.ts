@@ -60,6 +60,17 @@ const schema = z.object({
   RESEND_WEBHOOK_SECRET: z.string().optional().or(z.literal('').transform(() => undefined)),
   /** This API's public URL, used in confirm and unsubscribe links. Defaults to the URL the request came in on. */
   PUBLIC_API_URL: z.string().url().optional().or(z.literal('').transform(() => undefined)),
+  /** Slouch Catcher (betterhood.in/slouch-catcher/). Test mode: every photo gets an instant sample result (no AI)
+   *  and every coupon is SLOUCH_TEST_COUPON (nothing made in Shopify). Without GEMINI_API_KEY photos get samples too. */
+  SLOUCH_TEST_MODE: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
+  SLOUCH_TEST_COUPON: z.string().default('SLOUCHTEST200'),
+  /** Gemini model for the photo check. Default: GEMINI_FALLBACK_MODEL (the lite one, fast); GEMINI_MODEL is the backup. */
+  SLOUCH_GEMINI_MODEL: z.string().optional().or(z.literal('').transform(() => undefined)),
+  /** Coupons for 1000 points. With a Shopify Admin API token (write_discounts) each one is made in the store;
+   *  without one they come from the slouch_coupon_pool table. */
+  SHOPIFY_STORE_DOMAIN: z.string().optional().or(z.literal('').transform(() => undefined)),
+  SHOPIFY_ADMIN_TOKEN: z.string().optional().or(z.literal('').transform(() => undefined)),
+  SHOPIFY_API_VERSION: z.string().default('2025-01'),
   /** Comma-separated phone numbers that can sign in to the admin dashboard (/admin). */
   ADMIN_PHONES: z.string().default(''),
   OTP_DEV_CODE: z
